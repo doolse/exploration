@@ -1,5 +1,5 @@
 {
-  "name": "compiler",
+  "name": "sweetlang",
   "ignore": [
     "**/.*",
     "node_modules",
@@ -11,7 +11,7 @@
     "purescript-console": "^3.0.0",
     "purescript-maybe": "^3.0.0",
     "purescript-tuples": "^4.1.0",
-    "purescript-arrays": "^4.2.1"
+    "purescript-unsafe-coerce": "^3.0.0"
   },
   "devDependencies": {
     "purescript-psci-support": "^3.0.0"
