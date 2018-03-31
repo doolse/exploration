@@ -1,0 +1,15 @@
+{
+  "name": "exploration",
+  "set": "psc-0.11.7",
+  "source": "https://github.com/purescript/package-sets.git",
+  "depends": [
+    "arrays",
+    "either",
+    "tuples",
+    "console",
+    "maybe",
+    "unsafe-coerce",
+    "eff",
+    "prelude"
+  ]
+}
