@@ -84,6 +84,8 @@ unify (IntT _) o = Left $ Expected "Int"
 unify (StringT _) o = Left $ Expected "String"
 unify _ _ = Left $ Expected "Types that could unify"
 
+unifyConst = unified <<< (to <<< const) 
+
 unified :: forall s. Getter' s Type -> Lens' s Type -> ExceptT Errors (State s) Type
 unified lt rt = do 
   t1 <- use lt
@@ -157,19 +159,15 @@ fromPosArgs names = do
 
 -- addInt :: forall a. {a: a, b:a} -> a
 addAny :: Type
-addAny = CTLambda addApplyCT
-  where 
-  addApplyCT = do 
+addAny = CTLambda do 
     fromPosArgs ["a", "b"]
     at <- use _a
     maybe (pure addAny) (map $ RTLambda addAny) $ getRTAdd at
 
 add2 :: Type 
-add2 = CTLambda add2CT 
-  where 
-  add2CT = do 
+add2 = CTLambda $ do 
     fromPosArgs ["a"]
-    a1 <- unified (to $ const unkInt) _a 
+    a1 <- unifyConst unkInt _a 
     {return} <- get
     applyCTWith addAny {args:[Positional a1, Positional $ known 2], return}
 
@@ -197,3 +195,12 @@ main = do
   log $ unsafeCoerce $ do 
     ft <- runFunc (applyCT addAny) {args: [Positional $ knownString "sdf", Positional $ UnknownT], return: UnknownT}
     pure $ exprToString <$> expressionOrFunc ft
+
+-- testIt :: Type 
+-- testIt = CTLambda ?o
+
+
+-- test(a, b) = 
+--  let o = mul(a, b)
+--  in add(o, 5)
+-- test a b = a * b  
