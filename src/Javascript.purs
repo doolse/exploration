@@ -2,6 +2,7 @@ module Javascript where
 
 import Prelude
 
+import Control.Monad.State (State)
 import Data.String (joinWith)
 
 data JSExpr =
@@ -15,6 +16,8 @@ data JSStatement =
   Return JSExpr | AssignVar String JSExpr
 
 type JSFunction = { name :: String, params:: Array String, stmts :: Array JSStatement }
+
+type JSContext m = { newArg :: m JSExpr, newLocal :: JSExpr -> m JSExpr }
 
 exprToString (Local l) = l 
 exprToString (JSString s) = "\"" <> s <> "\""
