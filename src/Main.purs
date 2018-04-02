@@ -106,7 +106,8 @@ mulInt = lambda "*" do
   setResult result
   at <- useArg 2
   bt <- useArg 3
-  runtime $ RuntimeAp (jsConstant result # flip maybe pure do 
+  runtime $ RuntimeAp (
+    jsConstant result # flip maybe pure do 
     a <- exprForArg at
     b <- exprForArg bt
     pure $ InfixFuncApp " * " a b)
@@ -115,8 +116,8 @@ unsafeIx :: Int -> ALens' (Array Type) Type
 unsafeIx i = unsafePartial $ 
   lens (flip unsafeIndex i) (\s u -> fromJust $ updateAt i u s)
 
-runFunc :: Type -> Array Type -> Either Errors (Array Type)
-runFunc t args = case t of 
+runFunc :: Array Type -> Either Errors (Array Type)
+runFunc args = unsafePartial $ case unsafeIndex args 0 of 
   (Lambda name f _) -> f (unsafeIx <$> (range 0 $ (length args) - 1)) args
   _ -> throwError $ Expected ""
 
@@ -140,7 +141,7 @@ expressionFunc = case _ of
 main :: forall e. Eff (console :: CONSOLE | e) Unit
 main = do
   log $ unsafePartial $ unsafeCoerce $ do 
-    a <- runFunc mulInt [mulInt, UnknownT, IntT $ Just 12, IntT $ Just 34]
+    a <- runFunc [mulInt, UnknownT, IntT $ Just 12, IntT $ Nothing]
     exprToString <$> (expressionFunc $ unsafeIndex a 0)
 
   -- pure UnknownT
