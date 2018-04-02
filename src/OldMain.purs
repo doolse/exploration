@@ -302,7 +302,7 @@ expressionOrFunc (Tuple (RTLambda _ _ f) {args}) =
   let appliedRT = runExceptT $ do 
         expr <- runApplyRT f $ (\arg -> {arg, expr:constantOrParam arg}) <$> args
         gets (_ {stmts = [Return expr]})
-  in AnonymousFunc <$> evalState appliedRT {params:[],stmts:[]}
+  in JSAnonFunc <$> evalState appliedRT {params:[],stmts:[]}
 expressionOrFunc (Tuple t _) = Left $ (Expected $ "Lambda but was: " <> show t)
 
 -- test(a, b) = 

@@ -2,23 +2,27 @@ module Main where
 
 import Prelude
 
-import Control.Monad.Except (ExceptT(..), runExceptT, throwError)
+import Control.Monad.Eff (Eff)
+import Control.Monad.Eff.Console (CONSOLE, log)
+import Control.Monad.Except (ExceptT(..), lift, runExceptT, throwError)
+import Control.Monad.Maybe.Trans (MaybeT(..), runMaybeT)
 import Control.Monad.Reader (ReaderT(..), ask, runReaderT)
-import Control.Monad.State (State, execState, gets, runState, runStateT)
-import Data.Array (index)
+import Control.Monad.State (State, evalState, execState, gets, runState, runStateT)
+import Data.Array (index, length, range, unsafeIndex, updateAt)
 import Data.Bifunctor (rmap)
 import Data.Either (Either(..), either)
-import Data.Lens (ALens', Lens', assign, cloneLens, modifying, use, withLens)
-import Data.Maybe (Maybe(..), maybe)
+import Data.Lens (ALens', Lens', assign, cloneLens, lens, modifying, use, withLens)
+import Data.Maybe (Maybe(..), fromJust, maybe)
 import Data.Tuple (Tuple(..))
-import Javascript (JSContext, JSExpr(..))
+import Javascript (JSContext, JSExpr(..), emptyFunction, exprToString, functionContext, return)
+import Partial.Unsafe (unsafePartial)
 import Unsafe.Coerce (unsafeCoerce)
 
 data Errors = Expected String | PositionalFirst String | MissingArg String
 
 type CompileAp = (forall s. Array (ALens' s Type) -> s -> Either Errors s)
 
-type RuntimeAp = (forall m. Monad m => JSContext m -> m JSExpr)
+newtype RuntimeAp = RuntimeAp (forall m. Monad m => ReaderT (JSContext m) m JSExpr)
 
 type CT s = ReaderT (Array (ALens' s Type)) (ExceptT Errors (State s))
 
@@ -28,6 +32,12 @@ data Type =
   | StringT (Maybe String)
   | NamedType String Type
   | Lambda String CompileAp (Maybe RuntimeAp)
+
+hasRT :: Type -> Boolean 
+hasRT = case _ of 
+  (IntT _) -> true 
+  (StringT _) -> true 
+  _ -> false
 
 lambda :: String -> (forall s.  CT s Unit) -> Type
 lambda name f = Lambda name (\l s -> 
@@ -75,22 +85,64 @@ unified t1 t2l = do
   unify t1 t2 # either throwError (\n2t -> assign l n2t $> n2t)
 
 jsConstant :: Type -> Maybe JSExpr
-jsConstant (IntT (Just a)) = JSInt a
-jsConstant ()
+jsConstant = case _ of 
+  (IntT (Just a)) -> Just $ JSInt a
+  (StringT (Just s)) -> Just $ JSString s
+  _ -> Nothing
 
-exprForType :: Type -> Maybe RuntimeAp
-exprForType = case _ of 
-  UnknownT -> Nothing
-  IntT
+-- exprToRT :: JSExpr -> (forall m. Monad m => JSContext m -> m JSExpr)
+-- exprToRT e = \_ -> pure e 
+
+exprForArg :: forall m. Monad m => Type -> ReaderT (JSContext m) m JSExpr
+exprForArg t = ReaderT \ctx -> case t of 
+  t | Just e <- jsConstant t -> pure e
+  t -> ctx.newArg
 
 mulInt :: Type 
 mulInt = lambda "*" do
   let calc (IntT (Just a)) (IntT (Just b)) = IntT (Just $ a * b)
       calc _ _ = IntT Nothing
-  (calc <$> useArg 2 <*> useArg 3) >>= setResult
-  runtime \ctx -> do 
-    ctx.newArg 
-    pure $ InfixFuncApp " * "
+  result <- calc <$> useArg 2 <*> useArg 3
+  setResult result
+  at <- useArg 2
+  bt <- useArg 3
+  runtime $ RuntimeAp (jsConstant result # flip maybe pure do 
+    a <- exprForArg at
+    b <- exprForArg bt
+    pure $ InfixFuncApp " * " a b)
+    
+unsafeIx :: Int -> ALens' (Array Type) Type
+unsafeIx i = unsafePartial $ 
+  lens (flip unsafeIndex i) (\s u -> fromJust $ updateAt i u s)
+
+runFunc :: Type -> Array Type -> Either Errors (Array Type)
+runFunc t args = case t of 
+  (Lambda name f _) -> f (unsafeIx <$> (range 0 $ (length args) - 1)) args
+  _ -> throwError $ Expected ""
+
+expressionFunc :: Type -> Either Errors JSExpr
+expressionFunc = case _ of 
+  (Lambda name _ (Just (RuntimeAp f))) -> do 
+    let (Tuple e fb) = runState (runReaderT f functionContext) emptyFunction
+    pure $ JSAnonFunc (return e fb)
+  _ -> throwError $ Expected "Lambda with RT"
+
+-- (Tuple _ {return}) | Just e <- ctConstant return = Right e
+-- expressionOrFunc (Tuple r _) | Just e <- ctConstant r = Right e
+-- expressionOrFunc (Tuple (RTLambda _ _ f) {args}) = 
+--   let appliedRT = runExceptT $ do 
+--         expr <- runApplyRT f $ (\arg -> {arg, expr:constantOrParam arg}) <$> args
+--         gets (_ {stmts = [Return expr]})
+--   in AnonymousFunc <$> evalState appliedRT {params:[],stmts:[]}
+-- expressionOrFunc (Tuple t _) = Left $ (Expected $ "Lambda but was: " <> show t)
+
+-- Have to make it combine the 
+main :: forall e. Eff (console :: CONSOLE | e) Unit
+main = do
+  log $ unsafePartial $ unsafeCoerce $ do 
+    a <- runFunc mulInt [mulInt, UnknownT, IntT $ Just 12, IntT $ Just 34]
+    exprToString <$> (expressionFunc $ unsafeIndex a 0)
+
   -- pure UnknownT
 
 --     use 
