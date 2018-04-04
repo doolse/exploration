@@ -4,7 +4,7 @@ import Prelude
 
 import Control.Monad.Eff (Eff)
 import Control.Monad.Eff.Console (CONSOLE, log)
-import Control.Monad.Except (ExceptT(..), lift, mapExceptT, runExceptT, throwError)
+import Control.Monad.Except (ExceptT(..), except, lift, mapExceptT, runExceptT, throwError)
 import Control.Monad.Maybe.Trans (MaybeT(..), runMaybeT)
 import Control.Monad.Reader (ReaderT(..), ask, runReaderT)
 import Control.Monad.State (State, StateT(..), evalState, execState, get, gets, modify, put, runState, runStateT)
@@ -39,8 +39,7 @@ data Type =
   | IntT (Maybe Int)  
   | StringT (Maybe String)
   | ArrayT (Maybe (Array Type)) (Type -> Type -> Either Errors Type)
-  | Native Type NativeExpr
-  | Lambda { name :: String, result :: Type, args :: Type, f :: Type -> Either Errors Type }
+  | Lambda { name :: String, args :: Type, result :: Type, native :: Maybe NativeExpr, f :: Type -> Either Errors Type }
 
 typeToPrim :: Type -> Maybe PrimType 
 typeToPrim (IntT _) = Just PInt 
@@ -64,12 +63,12 @@ unify l@(ArrayT _ u) o = u l o
 unify l r        | {lpM: Just lp, rpM: Just rp} <- {lpM:typeToPrim l, rpM:typeToPrim r} = 
     if lp == rp then pure r else throwError $ Expected (primToString lp)
 unify l UnknownT | Just p <- typeToPrim l = pure $ emptyPrim p
-unify l o        | Just p <- typeToPrim l = throwError $ Expected (primToString p)
+unify l o        | Just p <- typeToPrim l = throwError $ Expected $ (primToString p) <> " but was " <> show o
 unify _ _ = throwError FailedUnification
 
 unifyArray :: Type -> Type -> Either Errors Type
 unifyArray (ArrayT (Just a) u) (ArrayT (Just b) _) | length a == length b = (\a -> ArrayT (Just a) u) <$> (traverse (uncurry unify) (zip a b))
-unifyArray _ _ = throwError $ Expected "Types that could unify"
+unifyArray l r = throwError $ Expected $ "An array to unify but got: " <> show l <> " and " <> show r
 
 ctArr :: Array Type -> Type 
 ctArr arr = ArrayT (Just arr) unifyArray
@@ -95,19 +94,27 @@ ctInt i = IntT (Just i)
 ctString :: String -> Type 
 ctString s = StringT (Just s)
 
-unifiedLambda :: forall r. String -> Type -> {args::Type|r} -> AP r Type -> Type
-unifiedLambda name result initial body = 
-  Lambda {name,result, args: initial.args, f: f initial }
+lambda :: forall r. String -> {args::Type|r} -> Type -> AP r (Tuple Type (Maybe NativeExpr)) -> Type
+lambda name initial result body = 
+  Lambda {name,result, args: initial.args, native: Nothing, f: f initial }
   where 
     f s@{args} newargs = do 
       unifiedArgs <- unify args newargs
       let unifiedState = s {args = unifiedArgs}
       let (Tuple res nextState) = runState (runExceptT body) unifiedState
-      res # rmap (\nr -> Lambda {name, result:nr, args: nextState.args, f: f nextState})
+      res # rmap (\(Tuple nr ne) -> Lambda {name, result:nr, native: ne, args: nextState.args, f: f nextState})
 
 resultType :: Type -> Either Errors Type 
 resultType (Lambda {result}) = pure result
 resultType _ = throwError (Expected "Lambda result")
+
+applyResult :: Type -> Array Type -> Either Errors Type 
+applyResult t arr = applyLambda t arr >>= resultType
+
+applyLambda :: Type -> Array Type -> Either Errors Type
+applyLambda t args = case t of 
+  Lambda {f} -> f (ctArr args)
+  _ -> throwError (Expected "A lambda to apply")
 
 applyUnsafe :: Type -> Array Type -> Type 
 applyUnsafe t args = unsafePartial case t of 
@@ -119,3 +126,10 @@ instance showError :: Show Errors where
     (PositionalFirst msg) -> "Positional arguments must be first " <> msg 
     (MissingArg msg) -> "Missing argument to function: " <> msg
     (FailedUnification) -> "Failed to unify types"
+
+instance showType :: Show Type where 
+  show = case _ of 
+    a | Just p <- typeToPrim a -> primToString p
+    UnknownT -> "An unknown type"
+    (Lambda {name, args, result }) -> "\\" <> name
+    _ -> "Who knows?"

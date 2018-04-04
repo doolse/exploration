@@ -21,15 +21,14 @@ data JSExpr =
 
 type JSRuntimeGen s = ReaderT (JSContext s) (State s)
 
-nativeJS :: forall s. Type -> JSRuntimeGen s JSExpr -> Type
-nativeJS t r = Native t (unsafeCoerce r)
+nativeJS :: forall s. JSRuntimeGen s JSExpr -> NativeExpr
+nativeJS r = unsafeCoerce r
 
 typeToJS :: forall s. Type -> JSRuntimeGen s JSExpr
 typeToJS = case _ of 
   (IntT (Just a)) -> pure $ JSInt a
   (StringT (Just s)) -> pure $ JSString s
-  (Native _ ne) -> (unsafeCoerce ne)
-  (Lambda {result}) -> typeToJS result
+  (Lambda {native: Just expr}) -> unsafeCoerce expr
   o -> let _ = spy o in newArg
 
 withCtx :: forall s a. (JSContextR s -> JSRuntimeGen s a) -> JSRuntimeGen s a 
