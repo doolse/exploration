@@ -39,7 +39,7 @@ data Type =
   | IntT (Maybe Int)  
   | StringT (Maybe String)
   | ArrayT (Maybe (Array Type)) (Type -> Type -> Either Errors Type)
-  | Lambda { name :: String, args :: Type, result :: Type, native :: Maybe NativeExpr, f :: Type -> Either Errors Type }
+  | Lambda { name :: String, args :: Type, result :: Type, native :: Either Errors NativeExpr, f :: Type -> Either Errors Type }
 
 typeToPrim :: Type -> Maybe PrimType 
 typeToPrim (IntT _) = Just PInt 
@@ -94,9 +94,9 @@ ctInt i = IntT (Just i)
 ctString :: String -> Type 
 ctString s = StringT (Just s)
 
-lambda :: forall r. String -> {args::Type|r} -> Type -> AP r (Tuple Type (Maybe NativeExpr)) -> Type
-lambda name initial result body = 
-  Lambda {name,result, args: initial.args, native: Nothing, f: f initial }
+lambda :: forall r. String -> {args::Type|r} -> Type -> Either Errors NativeExpr -> AP r (Tuple Type (Either Errors NativeExpr)) -> Type
+lambda name initial result native body = 
+  Lambda {name,result, args: initial.args, native, f: f initial }
   where 
     f s@{args} newargs = do 
       unifiedArgs <- unify args newargs

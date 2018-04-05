@@ -2,14 +2,16 @@ module Javascript where
 
 import Prelude
 
+import Control.Monad.Except (ExceptT(..), except, runExcept, runExceptT, throwError)
 import Control.Monad.Reader (ReaderT(..), ask, lift)
 import Control.Monad.State (State, get, modify)
 import Data.Array (length, snoc)
+import Data.Either (Either, either)
 import Data.Maybe (Maybe(..))
 import Data.String (joinWith)
 import Data.Symbol (SProxy(..))
 import Debug.Trace (spy)
-import Types (NativeExpr, Type(..))
+import Types (Errors(..), NativeExpr, Type(..))
 import Unsafe.Coerce (unsafeCoerce)
 
 data JSExpr =
@@ -21,15 +23,20 @@ data JSExpr =
 
 type JSRuntimeGen s = ReaderT (JSContext s) (State s)
 
-nativeJS :: forall s. JSRuntimeGen s JSExpr -> NativeExpr
-nativeJS r = unsafeCoerce r
+nativeJS :: forall s. Either Errors (JSRuntimeGen s JSExpr) -> Either Errors NativeExpr
+nativeJS = unsafeCoerce
 
-typeToJS :: forall s. Type -> JSRuntimeGen s JSExpr
+fromNative :: NativeExpr -> (forall s. JSRuntimeGen s JSExpr)
+fromNative = unsafeCoerce
+
+typeToJS :: forall s. Type -> Either Errors (JSRuntimeGen s JSExpr)
 typeToJS = case _ of 
-  (IntT (Just a)) -> pure $ JSInt a
-  (StringT (Just s)) -> pure $ JSString s
-  (Lambda {native: Just expr}) -> unsafeCoerce expr
-  o -> let _ = spy o in newArg
+  (IntT (Just a)) -> pure $ pure $ JSInt a
+  (StringT (Just s)) -> pure $ pure $ JSString s
+  (IntT _) -> pure $ newArg
+  (StringT _) -> pure $ newArg
+  (Lambda {native}) ->  map fromNative native
+  o -> throwError $ (Expected $ "Can't create code for:" <> show o)
 
 withCtx :: forall s a. (JSContextR s -> JSRuntimeGen s a) -> JSRuntimeGen s a 
 withCtx f = ask >>= \(JSContext c) -> f c 
