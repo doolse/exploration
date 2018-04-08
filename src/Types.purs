@@ -28,84 +28,103 @@ data TypeFlags = UnifyWith String
 
 foreign import data NativeExpr :: Type 
 
-data PrimType = PInt | PString | PArray
+data PrimType = PInt | PString
 
 derive instance pEq :: Eq PrimType
 
-data Type = Type TypeT (Maybe NativeExpr)
+type NativeContext = {const :: Type -> Maybe NativeExpr}
+
+data Type = Type {t :: TypeT, refs :: Int }
+
+type LambdaR = { name :: String, args :: Array Type, result :: Type, 
+      f :: Array Type -> Either Errors Type, frt :: Array (Tuple Type NativeExpr) -> NativeContext -> Either Errors NativeExpr }
+
 data TypeT = 
     UnknownT 
   | IntT (Maybe Int)  
   | StringT (Maybe String)
-  | ArrayT (Maybe (Array Type)) (TypeT -> TypeT -> Either Errors TypeT)
-  | Lambda { name :: String, args :: Array Type, result :: Type, f :: Array Type -> Either Errors Type }
+  | ArrayT Type (Maybe (Array Type))
+  | Lambda LambdaR
 
 typeT :: Type -> TypeT 
-typeT (Type t _) = t
+typeT (Type {t}) = t
 
 typeToPrim :: TypeT -> Maybe PrimType 
 typeToPrim (IntT _) = Just PInt 
 typeToPrim (StringT _) = Just PString 
-typeToPrim (ArrayT _ _) = Just PArray 
 typeToPrim _ = Nothing
 
 emptyPrim :: PrimType -> TypeT
 emptyPrim PInt = IntT Nothing
 emptyPrim PString = StringT Nothing 
-emptyPrim PArray = ArrayT Nothing unifyArray
 
 primToString :: PrimType -> String 
 primToString PInt = "Int"
 primToString PString = "String"
-primToString PArray = "Array"
 
 unify :: Type -> Type -> Either Errors Type 
-unify (Type t1 r1) (Type t2 r2) = map (\nt -> Type nt r2) $ unifyT t1 t2 
+unify (Type {t:t1}) (Type {t:t2, refs:r2}) = map (\nt -> Type {t:nt, refs:r2}) $ unifyT t1 t2 
 
 unifyT :: TypeT -> TypeT -> Either Errors TypeT 
 unifyT UnknownT o = pure o
-unifyT l@(ArrayT _ u) o = u l o
 unifyT l r        | {lpM: Just lp, rpM: Just rp} <- {lpM:typeToPrim l, rpM:typeToPrim r} = 
     if lp == rp then pure r else throwError $ Expected (primToString lp)
 unifyT l UnknownT | Just p <- typeToPrim l = pure $ emptyPrim p
 unifyT l o        | Just p <- typeToPrim l = throwError $ Expected $ (primToString p) <> " but was " <> show o
 unifyT _ _ = throwError FailedUnification
 
-unifyArray :: TypeT -> TypeT -> Either Errors TypeT
-unifyArray (ArrayT (Just a) u) (ArrayT (Just b) _) | length a == length b = (\a -> ArrayT (Just a) u) <$> (traverse (uncurry unify) (zip a b))
-unifyArray l r = throwError $ Expected $ "An array to unify but got: " <> show l <> " and " <> show r
+incRef :: Type -> Type 
+incRef (Type {t,refs}) = Type {t, refs: refs + 1}
 
-ctArr :: Array Type -> Type 
-ctArr arr = Type (ArrayT (Just arr) unifyArray) Nothing
+unknownT :: Type 
+unknownT = Type {t:UnknownT, refs:0}
+
+ctArr :: Type -> Array Type -> Type 
+ctArr art arr = Type {t:ArrayT art (Just arr), refs:0}
 
 arr :: forall r. Int -> Array Type -> Either Errors Type 
 arr i args | Just a <- index args i = pure a
 arr i _  = throwError $ MissingArg (show i)
 
 intValue :: Type -> Maybe Int 
-intValue (Type t _ ) = case t of 
+intValue (Type {t}) = case t of 
   (IntT a) -> a 
   _ -> Nothing
 
+undefPrim :: PrimType -> Type 
+undefPrim p = Type {t, refs:0}
+  where t = case p of 
+          PInt -> IntT Nothing 
+          PString -> StringT Nothing 
+
 undefInt :: Type 
-undefInt = Type (IntT Nothing) Nothing
+undefInt = undefPrim PInt
 
 ctInt :: Int -> Type 
-ctInt i = Type (IntT (Just i)) Nothing
+ctInt i = Type {t:IntT (Just i), refs:0}
 
 ctString :: String -> Type 
-ctString s = Type (StringT (Just s)) Nothing
+ctString s = Type {t:(StringT (Just s)), refs:0}
 
-lambda :: forall r. String -> Array Type -> Type -> (Array Type -> Either Errors {args::Array Type, result::Type}) -> Type
-lambda name args result app = Type (Lambda {name, args, result, f: f args }) Nothing
+lambda :: forall r. String 
+  -> Array Type 
+  -> Type 
+  -> (Array Type -> Either Errors {args::Array Type, result::Type}) 
+  -> (Array (Tuple Type NativeExpr) -> NativeContext -> Either Errors NativeExpr)
+  -> Type
+lambda name args result app frt = Type {t: Lambda {name, args, result, f: f 1 args, frt }, refs:0}
   where 
-    f args nextargs = do 
+    f refs args nextargs = do 
       unifiedargs <- sequence $ (uncurry unify <$> zip args nextargs)
       res <- app unifiedargs
-      pure $ Type (Lambda {name, args:res.args, result: res.result, f: f res.args}) Nothing
+      pure $ Type { t:Lambda {name, args:res.args, result: res.result, f: f (refs + 1) res.args, frt}, refs}
+
+lambdaR :: Type -> Either Errors LambdaR
+lambdaR (Type {t: Lambda r}) = pure r
+lambdaR _ = throwError (Expected "Lambda result")
 
 resultType :: Type -> Either Errors Type 
-resultType (Type (Lambda {result}) _) = pure result
+resultType (Type {t: Lambda {result}}) = pure result
 resultType _ = throwError (Expected "Lambda result")
 
 applyResult :: Type -> Array Type -> Either Errors Type 
@@ -133,9 +152,12 @@ instance showError :: Show Errors where
     (MissingArg msg) -> "Missing argument to function: " <> msg
     (FailedUnification) -> "Failed to unify types"
 
-instance showType :: Show TypeT where 
+instance showTypeT :: Show TypeT where 
   show = case _ of 
     a | Just p <- typeToPrim a -> primToString p
     UnknownT -> "An unknown type"
     (Lambda {name, args, result }) -> "\\" <> name
     _ -> "Who knows?"
+
+instance showType :: Show Type where 
+  show (Type {t,refs}) = show t <> ":" <> show refs

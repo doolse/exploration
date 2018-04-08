@@ -5,13 +5,14 @@ import Prelude
 import Control.Monad.Except (ExceptT(..), except, runExcept, runExceptT, throwError)
 import Control.Monad.Reader (ReaderT(..), ask, lift, runReaderT)
 import Control.Monad.State (State, get, modify, runState)
-import Data.Array (length, snoc)
+import Data.Array (length, snoc, unsafeIndex)
 import Data.Either (Either, either)
 import Data.Maybe (Maybe(..), maybe)
 import Data.String (joinWith)
 import Data.Symbol (SProxy(..))
-import Data.Tuple (Tuple(..))
+import Data.Tuple (Tuple(..), snd)
 import Debug.Trace (spy)
+import Partial.Unsafe (unsafePartial)
 import Types (Errors(..), NativeExpr, Type(..), TypeT(..))
 import Unsafe.Coerce (unsafeCoerce)
 
@@ -24,17 +25,23 @@ data JSExpr =
 
 type JSRuntimeGen s = ReaderT (JSContext s) (State s)
 
+constJS :: JSExpr -> NativeExpr 
+constJS e = nativeJS $ pure e
+
 nativeJS :: forall s. (JSRuntimeGen s JSExpr) -> NativeExpr
 nativeJS = unsafeCoerce
 
 fromNative :: NativeExpr -> (forall s. JSRuntimeGen s JSExpr)
 fromNative = unsafeCoerce
 
-typeToJS :: forall s. Type -> Maybe (JSRuntimeGen s JSExpr)
-typeToJS (Type _ (Just ne)) = Just (fromNative ne)
-typeToJS (Type t _) = case t of 
-  (IntT (Just a)) -> pure $ pure $ JSInt a
-  (StringT (Just s)) -> pure $ pure $ JSString s
+jsArg :: forall s. Array (Tuple Type NativeExpr) -> Int -> (JSRuntimeGen s JSExpr)
+jsArg arr i = fromNative $ snd $ (unsafePartial $ unsafeIndex arr i)
+
+
+typeToJS :: forall s. Type -> Maybe JSExpr
+typeToJS (Type {t}) = case t of 
+  (IntT (Just a)) -> pure $ JSInt a
+  (StringT (Just s)) -> pure $ JSString s
   _ -> Nothing
 
 withCtx :: forall s a. (JSContextR s -> JSRuntimeGen s a) -> JSRuntimeGen s a 
@@ -63,15 +70,14 @@ exprToString (Local l) = l
 exprToString (JSString s) = "\"" <> s <> "\""
 exprToString (JSInt i) = show i
 exprToString (InfixFuncApp n a b) = exprToString a <> n <> exprToString b
-exprToString (JSAnonFunc {params, stmts}) =  "function(" <> (joinWith "," params) <> ") {" <> 
+exprToString (JSAnonFunc {params, stmts}) =  "function(" <> (joinWith "," params) <> ") {\n" <> 
         joinWith "\n" (stmtToString <$> stmts) <> "\n}\n"
 
 stmtToString (Return expr) = "return " <> exprToString expr <> ";"
 stmtToString (AssignVar v expr) = "var " <> v <> " = " <> exprToString expr <> ";"
 
-constOrArg :: Type -> State JSFunctionBody Type 
-constOrArg t@(Type o _) = maybe ((\l -> Type o (Just $ nativeJS $ pure l)) <$> newArg) alreadyConst $ typeToJS t
-  where alreadyConst g = pure (Type o $ Just $ nativeJS g)
+constOrArg :: Type -> State JSFunctionBody JSExpr 
+constOrArg t = maybe newArg pure $ typeToJS t
 
 newArg :: State JSFunctionBody JSExpr 
 newArg = do 
