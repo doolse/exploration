@@ -7,94 +7,92 @@ import Control.Monad.Eff.Console (CONSOLE, log)
 import Control.Monad.Error.Class (throwError)
 import Control.Monad.Except (except, runExceptT)
 import Control.Monad.Reader (lift, runReaderT)
-import Control.Monad.State (evalState, get, gets, runState)
+import Control.Monad.State (State, evalState, get, gets, runState)
 import Data.Array (index)
 import Data.Either (Either, either)
 import Data.Lens (_1)
 import Data.Lens.Zoom (zoom)
 import Data.Maybe (Maybe(..), maybe)
+import Data.Traversable (sequence, traverse)
 import Data.Tuple (Tuple(..), uncurry)
-import Javascript (JSExpr(..), anonFunc, emptyFunction, exprToString, functionContext, nativeJS, return, typeToJS)
+import Javascript (JSExpr(..), JSFunctionBody, JSRuntimeGen, anonFunc, constOrArg, emptyFunction, exprToString, functionContext, genFunc, nativeJS, newArg, return, typeToJS)
 import Partial.Unsafe (unsafePartial)
-import Types (AP, Errors(..), NativeExpr, Type(..), applyLambda, applyResult, applyUnsafe, arg, ctArr, ctInt, ctString, intValue, lambda, resultType, undefInt)
+import Types (Errors(..), NativeExpr, Type(..), TypeT(..), applyLambda, applyResult, applyUnsafe, arr, ctArr, ctInt, ctString, intValue, lambda, result, resultType, typeT, undefInt)
 import Unsafe.Coerce (unsafeCoerce)
 
 
 mulInt :: Type
-mulInt = lambda "*" {args:ctArr [undefInt, undefInt]} undefInt (nativeApp undefInt undefInt) $ do 
-  a <- arg 0
-  b <- arg 1
-  pure $ case {a,b} of 
-    {a, b} | {a: Just ia, b:Just ib} <- {a: intValue a, b:intValue b} -> 
-        let v = IntT (Just $ ia * ib) 
-        in Tuple v (nativeJS $ typeToJS v)
-    {a, b} -> Tuple undefInt $ nativeApp a b 
+mulInt = lambda "*" [undefInt, undefInt] undefInt doMult 
   where 
-  nativeApp a1 b1 = nativeJS do 
-    ag <- typeToJS a1
-    bg <- typeToJS b1
-    pure $ do 
-      ae <- ag 
-      be <- bg
-      pure $ InfixFuncApp " * " ae be
+  doMult args = do 
+    a <- arr 0 args
+    b <- arr 1 args 
+    pure $ case {a,b} of 
+      {a, b} | {a: Just ia, b:Just ib} <- {a: intValue a, b:intValue b} -> 
+          let result = ctInt (ia * ib) 
+          in {args, result}
+      {a, b} -> let 
+        resfunc = do 
+          ar <- typeToJS a  
+          br <- typeToJS b
+          pure $ do 
+            ae <- ar 
+            be <- br
+            pure $ InfixFuncApp " * " ae be
+            in {args, result: Type (IntT Nothing) (nativeJS <$> resfunc)}
 
 addInt :: Type
-addInt = lambda "+" {args:ctArr [undefInt, undefInt]} undefInt (nativeApp undefInt undefInt) $ do 
-  a <- arg 0
-  b <- arg 1
-  pure $ case {a,b} of 
-    {a, b} | {a: Just ia, b:Just ib} <- {a: intValue a, b:intValue b} -> 
-        let v = IntT (Just $ ia + ib) 
-        in Tuple v (nativeJS $ typeToJS v)
-    {a, b} -> Tuple undefInt $ nativeApp a b 
+addInt = lambda "*" [undefInt, undefInt] undefInt doMult 
   where 
-  nativeApp a1 b1 = nativeJS do 
-    ag <- typeToJS a1
-    bg <- typeToJS b1
-    pure $ do 
-      ae <- ag 
-      be <- bg
-      pure $ InfixFuncApp " + " ae be
+  doMult args = do 
+    a <- arr 0 args
+    b <- arr 1 args 
+    pure $ case {a,b} of 
+      {a, b} | {a: Just ia, b:Just ib} <- {a: intValue a, b:intValue b} -> 
+          let result = ctInt (ia * ib) 
+          in {args, result}
+      {a, b} -> let 
+        resfunc = do 
+          ar <- typeToJS a  
+          br <- typeToJS b
+          pure $ do 
+            ae <- ar 
+            be <- br
+            pure $ InfixFuncApp " + " ae be
+            in {args, result: Type (IntT Nothing) (nativeJS <$> resfunc)}
 
 type FuncState = { o :: Type }
 
-errorOrFunction :: Either Errors Type -> String 
-errorOrFunction ee = bind ee typeToJS # either show mkFunc 
-  where 
-    mkFunc e = 
-      let (Tuple ret body) = runState (runReaderT e functionContext) emptyFunction
-      in exprToString (anonFunc ret body)
+errorOrFunction :: Type -> Array Type -> String 
+errorOrFunction l args = 
+  let (Tuple t fb) = runState (traverse constOrArg args) emptyFunction
+      actualFunc g = exprToString (genFunc fb g)
+      mkFunc e = maybe "ERROR" actualFunc $ typeToJS e
+  in either show mkFunc $ (applyLambda l t >>= resultType)
 
-al l a = except $ applyLambda l a 
+al = applyLambda
+lr = resultType
 
-la :: Int -> Type -> forall r. AP r Type 
-la i l = case l of 
-  Lambda {args : ArrayT (Just arr) _} -> maybe (throwError $ Expected "Arg out of bounds") pure $ index arr i
-  _ -> throwError (Expected "Lambda")
-
-lr :: Type -> forall r. AP r Type 
-lr l = case l of 
-  Lambda {result} -> pure $ result
-  _ -> throwError (Expected "Lambda")
-
-ar :: Type -> forall r. AP r (Tuple Type (Either Errors NativeExpr))
-ar l = case l of 
-  Lambda {result, native} -> pure $ (Tuple result native)
-  _ -> throwError (Expected "Lambda")
+larg :: Int -> Type -> Either Errors Type
+larg i t = case typeT t of 
+  (Lambda {args}) -> arr i args
+  _ -> throwError $ Expected "Lambda"
 
 complex :: Type 
-complex = lambda "complex" {args:ctArr [undefInt, undefInt]} undefInt (throwError $ Expected "To be applied") $ do
-  a <- arg 0
-  b <- arg 1
-  o <- al mulInt [b, ctInt 3]
-  a5 <- al mulInt [a, ctInt 5]
-  aba0 <- la 0 a5
-  aba1 <- lr a5
-  ab <- al addInt [aba0, aba1]
-  res0 <- lr ab
-  res1 <- lr o
-  result <- al addInt [res0, res1]
-  ar result
+complex = lambda "complex" [undefInt, undefInt] undefInt doComp 
+  where 
+  doComp args = do
+    a <- arr 0 args
+    b <- arr 1 args
+    o <- applyLambda mulInt [b, ctInt 3]
+    a5 <- applyLambda mulInt [a, ctInt 5]
+    aba0 <- larg 0 a5
+    aba1 <- lr a5
+    ab <- applyLambda addInt [aba0, aba1]
+    res0 <- lr ab
+    res1 <- lr o
+    res <- applyLambda addInt [res0, res1]
+    result [larg 0 ab, larg 0 o] (lr res) 
 
 
 
@@ -111,7 +109,7 @@ main = do
   -- let stateFul :: Type 
   --     stateFul = lambda "State" UnknownT  consts body 
 
-  log $ unsafePartial $ unsafeCoerce $ errorOrFunction $ (applyLambda complex [undefInt, undefInt])
+  log $ unsafePartial $ unsafeCoerce $ errorOrFunction complex [undefInt, ctInt 15]
     
 -- program(a, b)
 -- {

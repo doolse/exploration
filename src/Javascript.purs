@@ -3,15 +3,16 @@ module Javascript where
 import Prelude
 
 import Control.Monad.Except (ExceptT(..), except, runExcept, runExceptT, throwError)
-import Control.Monad.Reader (ReaderT(..), ask, lift)
-import Control.Monad.State (State, get, modify)
+import Control.Monad.Reader (ReaderT(..), ask, lift, runReaderT)
+import Control.Monad.State (State, get, modify, runState)
 import Data.Array (length, snoc)
 import Data.Either (Either, either)
-import Data.Maybe (Maybe(..))
+import Data.Maybe (Maybe(..), maybe)
 import Data.String (joinWith)
 import Data.Symbol (SProxy(..))
+import Data.Tuple (Tuple(..))
 import Debug.Trace (spy)
-import Types (Errors(..), NativeExpr, Type(..))
+import Types (Errors(..), NativeExpr, Type(..), TypeT(..))
 import Unsafe.Coerce (unsafeCoerce)
 
 data JSExpr =
@@ -23,26 +24,21 @@ data JSExpr =
 
 type JSRuntimeGen s = ReaderT (JSContext s) (State s)
 
-nativeJS :: forall s. Either Errors (JSRuntimeGen s JSExpr) -> Either Errors NativeExpr
+nativeJS :: forall s. (JSRuntimeGen s JSExpr) -> NativeExpr
 nativeJS = unsafeCoerce
 
 fromNative :: NativeExpr -> (forall s. JSRuntimeGen s JSExpr)
 fromNative = unsafeCoerce
 
-typeToJS :: forall s. Type -> Either Errors (JSRuntimeGen s JSExpr)
-typeToJS = case _ of 
+typeToJS :: forall s. Type -> Maybe (JSRuntimeGen s JSExpr)
+typeToJS (Type _ (Just ne)) = Just (fromNative ne)
+typeToJS (Type t _) = case t of 
   (IntT (Just a)) -> pure $ pure $ JSInt a
   (StringT (Just s)) -> pure $ pure $ JSString s
-  (IntT _) -> pure $ newArg
-  (StringT _) -> pure $ newArg
-  (Lambda {native}) ->  map fromNative native
-  o -> throwError $ (Expected $ "Can't create code for:" <> show o)
+  _ -> Nothing
 
 withCtx :: forall s a. (JSContextR s -> JSRuntimeGen s a) -> JSRuntimeGen s a 
 withCtx f = ask >>= \(JSContext c) -> f c 
-
-newArg :: forall s. JSRuntimeGen s JSExpr 
-newArg = withCtx _.newArg
 
 newLocal :: forall s. JSExpr -> JSRuntimeGen s JSExpr 
 newLocal e = withCtx (\a -> a.newLocal e)
@@ -60,7 +56,7 @@ return e fb = fb {stmts = snoc fb.stmts $ Return e }
  
 emptyFunction = {params:[], stmts:[]}
 
-type JSContextR s = { newArg :: JSRuntimeGen s JSExpr, newLocal :: JSExpr -> JSRuntimeGen s JSExpr }
+type JSContextR s = { newLocal :: JSExpr -> JSRuntimeGen s JSExpr }
 newtype JSContext s = JSContext (JSContextR s)
 
 exprToString (Local l) = l 
@@ -73,14 +69,24 @@ exprToString (JSAnonFunc {params, stmts}) =  "function(" <> (joinWith "," params
 stmtToString (Return expr) = "return " <> exprToString expr <> ";"
 stmtToString (AssignVar v expr) = "var " <> v <> " = " <> exprToString expr <> ";"
 
+constOrArg :: Type -> State JSFunctionBody Type 
+constOrArg t@(Type o _) = maybe ((\l -> Type o (Just $ nativeJS $ pure l)) <$> newArg) alreadyConst $ typeToJS t
+  where alreadyConst g = pure (Type o $ Just $ nativeJS g)
+
+newArg :: State JSFunctionBody JSExpr 
+newArg = do 
+  {params} <- get
+  let newName = "p" <> (show $ length params)
+  modify _ {params = snoc params newName}
+  pure $ Local newName
+
+genFunc :: JSFunctionBody -> JSRuntimeGen JSFunctionBody JSExpr -> JSExpr
+genFunc init rgen = let (Tuple ret body) = runState (runReaderT rgen functionContext) init
+  in anonFunc ret body
+
 functionContext :: JSContext JSFunctionBody
-functionContext = JSContext {newArg, newLocal} 
+functionContext = JSContext {newLocal} 
   where 
-    newArg = do 
-      {params} <- get
-      let newName = "p" <> (show $ length params)
-      modify _ {params = snoc params newName}
-      pure $ Local newName
     newLocal expr = do 
       {stmts} <- get
       let newName = "v" <> (show $ length stmts)
