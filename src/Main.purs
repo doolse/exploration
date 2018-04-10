@@ -2,26 +2,23 @@ module Main where
 
 import Prelude
 
+import Control.Alt ((<|>))
 import Control.Monad.Eff (Eff)
 import Control.Monad.Eff.Console (CONSOLE, log)
 import Control.Monad.Error.Class (throwError)
-import Control.Monad.Except (except, runExceptT)
-import Control.Monad.Reader (lift, runReaderT)
-import Control.Monad.State (State, StateT(..), evalState, get, gets, runState, runStateT)
-import Data.Array (foldl, foldr, fromFoldable, index, mapWithIndex, unsafeIndex, updateAt, zip)
-import Data.Either (Either(..), either)
-import Data.Lens (ALens', Lens', _1, _2, assign, cloneLens, lens', modifying, set, use, view, viewOn)
-import Data.Lens.Record (prop)
-import Data.Lens.Zoom (zoom)
+import Control.Monad.Reader (lift)
+import Control.Monad.State (StateT, get, runState, runStateT)
+import Data.Array (foldl, foldr, fromFoldable, mapWithIndex, unsafeIndex, updateAt, zip)
+import Data.Either (Either, either)
+import Data.Lens (ALens', Lens', _1, assign, cloneLens, lens', set, use, view)
 import Data.List.Lazy (range)
 import Data.Maybe (Maybe(..), fromJust, maybe, maybe')
-import Data.Symbol (SProxy(..))
-import Data.Traversable (sequence, traverse, traverse_)
-import Data.Tuple (Tuple(..), fst, snd, uncurry)
+import Data.Traversable (traverse, traverse_)
+import Data.Tuple (Tuple(Tuple), fst, uncurry)
 import Debug.Trace (spy)
-import Javascript (JSExpr(..), JSFunctionBody, JSRuntimeGen, anonFunc, constJS, constOrArg, emptyFunction, exprToString, fromNative, functionContext, genFunc, jsArg, nativeJS, newArg, return, typeToJS)
+import Javascript (JSExpr(InfixFuncApp), constJS, constOrArg, emptyFunction, exprToString, fromNative, genFunc, jsArg, nativeJS, typeToJS)
 import Partial.Unsafe (unsafePartial)
-import Types (Errors(..), LambdaR, NativeContext, NativeExpr, Type(..), TypeT(..), applyLambda, applyResult, applyUnsafe, arr, ctArr, ctInt, ctString, incRef, intValue, lambda, lambdaR, result, resultType, typeT, undefInt, unknownT)
+import Types (Errors(Expected), LambdaR, NativeContext, NativeExpr, PrimType(..), Type, TypeT(Lambda), applyLambda, arr, ctInt, ctString, incRef, intValue, lambda, lambdaR, polyLambda, resultType, strValue, typeT, undefInt, undefPrim, undefString, unknownT)
 import Unsafe.Coerce (unsafeCoerce)
 
 
@@ -40,6 +37,25 @@ mulInt = lambda "*" [undefInt, undefInt] undefInt doMult doRT
           {a, b} | {a: Just ia, b:Just ib} <- {a: intValue a, b:intValue b} -> ctInt (ia * ib)
           _ -> undefInt
     pure $ {args:[a,b], result}
+
+addString :: Type 
+addString = lambda "+" [undefString, undefString] undefString doAddStr doAddStrRT 
+  where 
+  doAddStr args = do 
+    a <- incRef <$> arr 0 args
+    b <- incRef <$> arr 1 args 
+    let result = case {a,b} of 
+          {a, b} | {a: Just ia, b:Just ib} <- {a: strValue a, b:strValue b} -> ctString (ia <> ib)
+          _ -> undefString
+    pure $ {args:[a,b], result}
+
+  doAddStrRT args toNE = pure $ nativeJS do
+    a <- jsArg args 0
+    b <- jsArg args 1 
+    pure $ InfixFuncApp " + " a b
+  
+add :: Type 
+add = polyLambda "+" [unknownT, unknownT] unknownT [addInt, addString]
 
 addInt :: Type
 addInt = lambda "+" [undefInt, undefInt] undefInt doMult doRT
@@ -113,8 +129,6 @@ applyIt f ap = do
   let lt = f r
   traverse_ (\(Tuple al v) -> assign ((cloneLens al) <<< _1) v) $ zip ap.args r.args
   assign (cloneLens ap.result) $ lt
-  news <- get
-  let _ = spy (news)
   pure $ lt
 
 ct :: forall s. StateLambda s -> s -> Array Type -> Either Errors {args:: Array Type, result :: Type}
@@ -139,7 +153,23 @@ rt sl s args ctx =
       convertResult (Tuple (Just (Tuple _ result)) s) = result s ctx 
       convertResult _ = throwError $ Expected "No result from body"
       initialState = set (cloneLens sl.args) (uncurry constExpr <$> args) s
-  in convertResult =<< runStateT run (spy initialState) 
+  in convertResult =<< runStateT run initialState
+
+aba :: Type 
+aba = lambda "aba" [unknownT, unknownT] unknownT (ct body initial) (rt body initial)
+  where 
+  _a = ltIx 0
+  _b = ltIx 1
+  _ab = ltIx 2
+  _result = ltIx 3
+  body :: StateLambda LTypeArray 
+  body = {args : argl [_a, _b], apps: [
+    capp "ab" add [_a, _b] _ab,
+    capp "aba" add [_ab, _a] _result
+  ]}
+  initial = typeArr 4
+
+typeArr len = LTypeArray $ fromFoldable $ (\i -> typeOnly (show i) unknownT) <$> range 0 (len - 1)
 
 complex :: Type 
 complex = lambda "complex" [undefInt, undefInt] undefInt (ct body initial) (rt body initial) 
@@ -151,15 +181,14 @@ complex = lambda "complex" [undefInt, undefInt] undefInt (ct body initial) (rt b
   _apa5 = ltIx 4
   _result = ltIx 5
 
-  initial :: LTypeArray 
-  initial = LTypeArray $ fromFoldable $ (\i -> typeOnly (show i) unknownT) <$> range 0 5
+  initial = typeArr 6
 
   body :: StateLambda LTypeArray 
   body = {args : argl [_a, _b], apps: [
     capp "o" mulInt [_b, c $ ctInt 3] _o,
     capp "a5" mulInt [_a, c $ ctInt 5] _a5,
-    capp "apa5" addInt [_a, _a5] _apa5,
-    capp "result" addInt [_apa5, _o] _result 
+    capp "apa5" add [_a, _a5] _apa5,
+    capp "result" add [_apa5, _o] _result 
   ]}
   
 -- Have to make it combine the 
@@ -168,9 +197,20 @@ main = do
   -- let stateFul :: Type 
   --     stateFul = lambda "State" UnknownT  consts body 
 
-  log $ unsafePartial $ unsafeCoerce $ errorOrFunction complex [unknownT, ctInt 3]
+  log $ errorOrFunction aba [unknownT, ctString "sda"]
+  log $ show $ al aba [unknownT, ctString "sda"]
+  log $ errorOrFunction complex [unknownT, ctString "120"]
     
--- program(a, b)
+-- complex(a, b)
+-- {
+--   let o = b * 3
+--   let a5 = a * 5
+--   let apa5 = a + a5
+--   apa5 + o
+--   
+-- }
+
+-- complex(a, b)
 -- {
 --   let o = b * 3
 --   let a5 = a * 5

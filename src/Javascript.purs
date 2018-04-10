@@ -2,18 +2,14 @@ module Javascript where
 
 import Prelude
 
-import Control.Monad.Except (ExceptT(..), except, runExcept, runExceptT, throwError)
-import Control.Monad.Reader (ReaderT(..), ask, lift, runReaderT)
+import Control.Monad.Reader (ReaderT, ask, runReaderT)
 import Control.Monad.State (State, get, modify, runState)
 import Data.Array (length, snoc, unsafeIndex)
-import Data.Either (Either, either)
 import Data.Maybe (Maybe(..), maybe)
 import Data.String (joinWith)
-import Data.Symbol (SProxy(..))
 import Data.Tuple (Tuple(..), snd)
-import Debug.Trace (spy)
 import Partial.Unsafe (unsafePartial)
-import Types (Errors(..), NativeExpr, Type(..), TypeT(..))
+import Types (NativeExpr, Type(Type), TypeT(StringT, IntT))
 import Unsafe.Coerce (unsafeCoerce)
 
 data JSExpr =

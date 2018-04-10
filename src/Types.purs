@@ -2,27 +2,21 @@ module Types where
 
 import Prelude
 
-import Control.Monad.Eff (Eff)
-import Control.Monad.Eff.Console (CONSOLE, log)
-import Control.Monad.Except (ExceptT(..), except, lift, mapExceptT, runExceptT, throwError)
-import Control.Monad.Maybe.Trans (MaybeT(..), runMaybeT)
-import Control.Monad.Reader (ReaderT(..), ask, runReaderT)
-import Control.Monad.State (State, StateT(..), evalState, execState, get, gets, modify, put, runState, runStateT)
-import Data.Array (index, length, unsafeIndex, updateAt, zip)
-import Data.Bifunctor (rmap)
-import Data.Either (Either(..), either, fromRight)
-import Data.Lens (ALens', Lens', _1, assign, cloneLens, lens, modifying, set, use, withLens)
-import Data.Lens.Zoom (zoom)
-import Data.List.Lazy (range)
-import Data.Maybe (Maybe(..), fromJust, fromMaybe, maybe, maybe')
-import Data.Record.Builder (build, merge)
-import Data.Traversable (sequence, traverse, traverse_)
-import Data.Tuple (Tuple(..), uncurry)
-import Debug.Trace (spy)
+import Control.Monad.Except (throwError)
+import Data.Array (index, length, mapMaybe, zip)
+import Data.Either (Either, either, fromRight)
+import Data.Maybe (Maybe(Just, Nothing))
+import Data.String (joinWith)
+import Data.Traversable (sequence)
+import Data.Tuple (Tuple, uncurry)
 import Partial.Unsafe (unsafePartial)
-import Unsafe.Coerce (unsafeCoerce)
+ 
 
-data Errors = Expected String | PositionalFirst String | MissingArg String | FailedUnification
+data Errors = Expected String 
+  | PositionalFirst String 
+  | MissingArg String 
+  | TooManyArgs Int Int
+  | FailedUnification
 
 data TypeFlags = UnifyWith String 
 
@@ -91,6 +85,11 @@ intValue (Type {t}) = case t of
   (IntT a) -> a 
   _ -> Nothing
 
+strValue :: Type -> Maybe String 
+strValue (Type {t}) = case t of 
+  (StringT a) -> a 
+  _ -> Nothing
+
 undefPrim :: PrimType -> Type 
 undefPrim p = Type {t, refs:0}
   where t = case p of 
@@ -100,13 +99,32 @@ undefPrim p = Type {t, refs:0}
 undefInt :: Type 
 undefInt = undefPrim PInt
 
+undefString :: Type 
+undefString = undefPrim PString
+
 ctInt :: Int -> Type 
 ctInt i = Type {t:IntT (Just i), refs:0}
 
 ctString :: String -> Type 
 ctString s = Type {t:(StringT (Just s)), refs:0}
 
-lambda :: forall r. String 
+polyLambda :: String 
+  -> Array Type 
+  -> Type 
+  -> Array Type
+  -> Type
+polyLambda name args result lams = Type {t: Lambda {name, args, result, f, 
+  frt: \_ _ -> throwError $ Expected ""}, refs:0}
+  where 
+  f newargs = 
+    let ignoreError l = either (const Nothing) Just $ applyLambda l newargs
+    in case mapMaybe ignoreError lams of 
+      [one] -> pure one 
+      [] -> throwError $ Expected "To match a lambda"
+      _ -> throwError $ Expected "Types to be more specific"
+
+
+lambda :: String 
   -> Array Type 
   -> Type 
   -> (Array Type -> Either Errors {args::Array Type, result::Type}) 
@@ -115,6 +133,11 @@ lambda :: forall r. String
 lambda name args result app frt = Type {t: Lambda {name, args, result, f: f 1 args, frt }, refs:0}
   where 
     f refs args nextargs = do 
+      let expectLen = length args
+          actualLen = length nextargs
+      when (expectLen > actualLen) $ throwError $ 
+        MissingArg $ "Not enough args, need " <> show (expectLen - actualLen) <> " more"
+      when (expectLen < actualLen) $ throwError $ TooManyArgs actualLen expectLen
       unifiedargs <- sequence $ (uncurry unify <$> zip args nextargs)
       res <- app unifiedargs
       pure $ Type { t:Lambda {name, args:res.args, result: res.result, f: f (refs + 1) res.args, frt}, refs}
@@ -150,13 +173,18 @@ instance showError :: Show Errors where
     (Expected a) -> "Expected " <> a
     (PositionalFirst msg) -> "Positional arguments must be first " <> msg 
     (MissingArg msg) -> "Missing argument to function: " <> msg
+    (TooManyArgs actual expected) -> "Too many arguments to function, expected" 
+        <> show expected <> " but got " <> show actual
     (FailedUnification) -> "Failed to unify types"
 
 instance showTypeT :: Show TypeT where 
-  show = case _ of 
+  show = case _ of
+    IntT (Just i) -> "Int(" <> show i <> ")" 
+    StringT (Just s) -> "String(" <> show s <> ")" 
     a | Just p <- typeToPrim a -> primToString p
-    UnknownT -> "An unknown type"
-    (Lambda {name, args, result }) -> "\\" <> name
+    UnknownT -> "?"
+    (Lambda {name, args, result }) -> name 
+      <> "(" <> (joinWith "," $ show <$> args) <> "=" <> show result <> ")"
     _ -> "Who knows?"
 
 instance showType :: Show Type where 
