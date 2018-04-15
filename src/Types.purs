@@ -27,7 +27,7 @@ data PrimType = PInt | PString
 
 derive instance pEq :: Eq PrimType
 
-type NativeContext = {const :: Type -> Maybe NativeExpr}
+type NativeContext = {const :: Type -> Maybe NativeExpr, local :: NativeExpr -> NativeExpr}
 
 data Type = Type {t :: TypeT, refs :: Int }
 
@@ -40,6 +40,9 @@ data TypeT =
   | StringT (Maybe String)
   | ArrayT Type (Maybe (Array Type))
   | Lambda LambdaR
+
+refCount :: Type -> Int 
+refCount (Type {refs}) = refs 
 
 typeT :: Type -> TypeT 
 typeT (Type {t}) = t
@@ -124,6 +127,14 @@ polyLambda name args result lams = Type {t: Lambda {name, args, result, f,
       [] -> throwError $ Expected "To match a lambda"
       a -> throwError $ Expected "Types to be more specific"
 
+checkArgs :: Array Type -> Array Type -> Either Errors (Array Type)
+checkArgs args nextargs = do 
+  let expectLen = length args
+      actualLen = length nextargs
+  when (expectLen > actualLen) $ throwError $ 
+    MissingArg $ "Not enough args, need " <> show (expectLen - actualLen) <> " more"
+  when (expectLen < actualLen) $ throwError $ TooManyArgs actualLen expectLen
+  sequence $ (uncurry unify <$> zip args nextargs) 
 
 lambda :: String 
   -> Array Type 
@@ -134,12 +145,7 @@ lambda :: String
 lambda name args result app frt = Type {t: Lambda {name, args, result, f: f 1 args, frt }, refs:0}
   where 
     f refs args nextargs = do 
-      let expectLen = length args
-          actualLen = length nextargs
-      when (expectLen > actualLen) $ throwError $ 
-        MissingArg $ "Not enough args, need " <> show (expectLen - actualLen) <> " more"
-      when (expectLen < actualLen) $ throwError $ TooManyArgs actualLen expectLen
-      unifiedargs <- sequence $ (uncurry unify <$> zip args nextargs)
+      unifiedargs <- checkArgs args nextargs
       res <- app unifiedargs
       pure $ Type { t:Lambda {name, args:res.args, result: res.result, f: f (refs + 1) res.args, frt}, refs}
 
