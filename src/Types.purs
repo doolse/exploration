@@ -31,7 +31,7 @@ type NativeContext = {const :: Type -> Maybe NativeExpr}
 data Type = Type {t :: TypeT, refs :: Int }
 
 type LambdaR = { name :: String, args :: Array Type, result :: Type, 
-      f :: Array Type -> Either Errors Type, frt :: Array (Tuple Type NativeExpr) -> NativeContext -> Either Errors NativeExpr }
+      f :: Array Type -> Either Errors Type, frt :: Array (Tuple Type NativeExpr) -> Type -> NativeContext -> Either Errors NativeExpr }
 
 data TypeT = 
     UnknownT 
@@ -114,7 +114,7 @@ polyLambda :: String
   -> Array Type
   -> Type
 polyLambda name args result lams = Type {t: Lambda {name, args, result, f, 
-  frt: \_ _ -> throwError $ Expected ""}, refs:0}
+  frt: \_ _ _ -> throwError $ Expected ""}, refs:0}
   where 
   f newargs = 
     let ignoreError l = either (const Nothing) Just $ applyLambda l newargs
@@ -128,7 +128,7 @@ lambda :: String
   -> Array Type 
   -> Type 
   -> (Array Type -> Either Errors {args::Array Type, result::Type}) 
-  -> (Array (Tuple Type NativeExpr) -> NativeContext -> Either Errors NativeExpr)
+  -> (Array (Tuple Type NativeExpr) -> Type -> NativeContext -> Either Errors NativeExpr)
   -> Type
 lambda name args result app frt = Type {t: Lambda {name, args, result, f: f 1 args, frt }, refs:0}
   where 
