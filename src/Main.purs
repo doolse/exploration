@@ -1,6 +1,6 @@
 module Main where 
 
-import Prelude
+import Prelude hiding (add)
 
 import Control.Alt ((<|>))
 import Control.Apply (applySecond)
@@ -8,7 +8,7 @@ import Control.Monad.Eff (Eff)
 import Control.Monad.Eff.Console (CONSOLE, log)
 import Control.Monad.Error.Class (throwError)
 import Control.Monad.Reader (lift)
-import Control.Monad.State (StateT, get, modify, runState, runStateT)
+import Control.Monad.State (State, StateT, evalStateT, execStateT, get, modify, runState, runStateT, state)
 import Data.Array (foldl, foldr, fromFoldable, mapWithIndex, unsafeIndex, updateAt, zip)
 import Data.Bifunctor (bimap, rmap)
 import Data.Either (Either, either)
@@ -17,7 +17,7 @@ import Data.List.Lazy (range)
 import Data.Maybe (Maybe(..), fromJust, maybe, maybe')
 import Data.Traversable (traverse, traverse_)
 import Data.Tuple (Tuple(Tuple), fst, snd, uncurry)
-import Debug.Trace (spy)
+import Debug.Trace (spy, traceAnyA)
 import Javascript (JSExpr(InfixFuncApp), constJS, constOrArg, emptyFunction, exprToString, fromNative, genFunc, jsArg, nativeJS, typeToJS)
 import Partial.Unsafe (unsafePartial)
 import Types (Errors(Expected), LambdaR, NativeContext, NativeExpr, PrimType(..), Type, TypeT(Lambda), applyLambda, arr, ctInt, ctString, incRef, intValue, lambda, lambdaR, polyLambda, resultType, strValue, typeT, undefInt, undefPrim, undefString, unknownT)
@@ -99,17 +99,17 @@ type LTypeLens s = ALens' s (LType s)
 type LensArray s = Array (LTypeLens s)
 type ArgLens s = ALens' s (Array (LType s))
 
-type LType s = Tuple Type (s -> NativeContext -> Either Errors NativeExpr)
+type LType s = Tuple Type (s -> Type -> NativeContext -> Either Errors NativeExpr)
 
-type App s = {name :: String, f :: s -> ArgLens s -> LType s, args :: ArgLens s, result :: LType s -> s -> s }
+type App s = {name :: String, f :: ArgLens s -> StateT s (Either Errors) LambdaR, args :: ArgLens s, result :: LType s -> s -> s }
 
 type StateLambda s = {args :: ArgLens s, apps :: Array (App s)}
 
 typeOnly :: forall s. String -> Type -> LType s
-typeOnly n t = Tuple t \_ _  -> throwError $ Expected $ "A native representation for " <> n 
+typeOnly n t = Tuple t \_ _ _ -> throwError $ Expected $ "A native representation for " <> n 
 
 constExpr :: forall s. Type -> NativeExpr -> LType s 
-constExpr t ne = Tuple t (\_ _ -> pure ne)
+constExpr t ne = Tuple t (\_ _ _ -> pure ne)
 
 ixUn :: forall s. Int -> ArgLens s -> Lens' s (LType s)
 ixUn i o = cloneLens o <<< (unsafePartial $ lens' \arr -> Tuple (unsafeIndex arr i) 
@@ -129,33 +129,47 @@ cl :: forall s a. Type -> Lens' s (LType s)
 cl t = lens' \s -> Tuple (c t) (const s)
 
 c :: forall s a. Type -> LType s
-c a = Tuple a (\_ ctx -> maybe (throwError $ Expected $ "A constant for" <> show a) pure $ ctx.const a)
+c a = Tuple a (\_ t ctx -> maybe (throwError $ Expected $ "A constant for" <> show t) pure $ ctx.const t)
 
 capp :: forall s. String -> Type -> Array (ALens' s (LType s)) -> (LType s -> s -> s) -> App s
-capp name cf args result = {name, f: \_ _ -> c cf, args: argl args, result}
+capp name lam args result = {name, f: runStateless, args: argl args, result}
+  where 
+  runStateless al = do 
+    let argsLens = cloneLens al
+    args <- use argsLens 
+    r <- lift $ applyLambda lam (fst <$> args) >>= lambdaR 
+    assign argsLens (zip r.args (snd <$> args))
+    pure $ r
 
-appLocal :: forall s. String -> (s -> ArgLens s -> LType s) -> Array (ALens' s (LType s)) -> (LType s -> s -> s) -> App s
-appLocal name f args result = {name, f, args: argl args, result}
 
-applyIt :: forall s. (LambdaR -> LType s) -> App s -> StateT s (Either Errors) (LType s)
-applyIt f ap = do 
-  let argsLens = cloneLens ap.args
-  s <- get
-  let (Tuple lam _) = ap.f s ap.args
-  args <- use argsLens
-  r <- lift $ applyLambda lam (fst <$> args) >>= lambdaR 
+appLocal :: forall s. String -> (ArgLens s -> StateT s (Either Errors) LambdaR) -> Array (ALens' s (LType s)) -> (LType s -> s -> s) -> App s
+appLocal name f args result = {name, f , args: argl args, result}
+
+
+applyIt :: forall s. String -> (LambdaR -> LType s) -> App s -> StateT s (Either Errors) (LType s)
+applyIt phase f ap = do 
+  r <- ap.f ap.args
+  -- let (Tuple lam _) = ap.f s ap.args
+  -- args <- use argsLens
+  -- r <- lift $ applyLambda lam (fst <$> args) >>= lambdaR 
+  -- 
+  -- assign argsLens (zip r.args (snd <$> args))
   let lt = f r
-  assign argsLens (zip r.args (snd <$> args))
   modify $ ap.result lt
+  news <- get 
+  let _ = spy {phase, name: ap.name, news} 
   pure $ lt
 
-ct :: forall s. StateLambda s -> s -> Array Type -> Either Errors {args:: Array Type, result :: Type}
-ct sl s args = 
-  let applyCT app = Just <<< fst <$> applyIt (_.result >>> typeOnly app.name) app
+ct :: forall s. StateLambda s -> Array Type -> StateT s (Either Errors) {args:: Array Type, result :: Type}
+ct sl args = do 
+  let applyCT app = Just <<< fst <$> applyIt "ct" (_.result >>> typeOnly app.name) app
       run = foldl (\a b -> a *> applyCT b) (pure Nothing) sl.apps
-      convertResult (Tuple (Just result) s) = pure {args: fst <$> view (cloneLens sl.args) s, result}
-      convertResult a = throwError $ Expected "No result from body"
-  in convertResult =<< runStateT (assign (cloneLens sl.args) (mapWithIndex (\i t -> typeOnly (show i) t) args) *> run) s 
+      -- convertResult (Tuple (Just result) s) = 
+      -- convertResult a = throwError $ Expected "No result from body"
+  assign (cloneLens sl.args) (mapWithIndex (\i t -> typeOnly (show i) t) args)
+  result <- run >>= maybe (throwError $ Expected "") pure
+  s <- get
+  pure {args: fst <$> view (cloneLens sl.args) s, result}
 
  
 
@@ -163,14 +177,14 @@ rt  :: forall s. StateLambda s -> s -> Array (Tuple Type NativeExpr) -> Type -> 
 rt sl is args resultType ctx = 
   let applyRT app = 
         let nativeExpr {result,frt} = 
-              let mkExpr s ctx = do 
-                    let mkArg (Tuple t mkNative) = Tuple t <$> mkNative s ctx
-                    stateArgs <- traverse mkArg $ view (cloneLens app.args)
+              let mkExpr s resultType ctx = do 
+                    let mkArg (Tuple t mkNative) = Tuple t <$> mkNative s t ctx
+                    stateArgs <- traverse mkArg $ view (cloneLens app.args) s
                     frt stateArgs resultType ctx
-              in maybe (Tuple result mkExpr) (constExpr result) (ctx.const (spy result))
-        in Just <$> applyIt nativeExpr app
+              in Tuple result mkExpr
+        in Just <$> applyIt "rt" nativeExpr app
       run = foldl (\a b -> a *> applyRT b) (pure Nothing) sl.apps
-      convertResult (Tuple (Just (Tuple _ result)) s) = result s ctx
+      convertResult (Tuple (Just (Tuple _ result)) s) = result s resultType ctx
       convertResult _ = throwError $ Expected "No result from body"
       initialState = set (cloneLens sl.args) (uncurry constExpr <$> args) is
   in convertResult =<< runStateT run initialState
@@ -200,8 +214,11 @@ typeArr len = LTypeArray $ fromFoldable $ (\i -> typeOnly (show i) unknownT) <$>
 --   
 -- }
 
+ctt :: forall s. s -> StateLambda s -> Array Type -> Either Errors {args:: Array Type, result :: Type}
+ctt initial lam args = evalStateT (ct lam args) initial
+
 complex :: Type 
-complex = lambda "complex" [undefInt, undefInt] undefInt (ct body initial) (rt body initial) 
+complex = lambda "complex" [undefInt, undefInt] undefInt (ctt initial body) (rt body initial) 
   where 
   _a = ltIx 0
   _b = ltIx 1
@@ -237,14 +254,14 @@ innerLambda = lambda "innerLambda" [undefInt, undefInt] undefInt (ct body initia
   _o = ltIx 2
   _ca = ltIx 3
   _cb = ltIx 4
-  _cacb = ltIx 6
-  _car = ltIx 7 
-  _cbr = ltIx 8
+  _cacb = ltIx 5
+  _car = ltIx 6
+  _cbr = ltIx 7
 
-  initial = typeArr 9
+  initial = typeArr 8
 
-  lamC :: Lens' LTypeArray (LType LTypeArray) -> LTypeArray -> ArgLens LTypeArray -> LType LTypeArray
-  lamC l s args = c $ lambda "innerLambda" [unknownT] unknownT (ct {args, apps} s) (rt {args, apps} s)
+  lamC :: Lens' LTypeArray (LType LTypeArray) -> StateT LTypeArray   -> ArgLens LTypeArray -> LType LTypeArray
+  lamC l s args = c $ lambda "innerLambda" [undefInt] undefInt (ct {args, apps} s) (rt {args, apps} s)
     where apps = [
       capp "c1" mulInt [ixUn 0 args, cl $ ctInt 5] $ set l, 
       capp "cresult" add [l, _o] $ const id
@@ -265,8 +282,8 @@ main = do
   -- let stateFul :: Type 
   --     stateFul = lambda "State" UnknownT  consts body 
 
-  log $ errorOrFunction innerLambda [unknownT, unknownT]
-  log $ show $ al aba [unknownT, ctString "sda"]
-  log $ errorOrFunction complex [unknownT, ctString "120"]
+  log $ errorOrFunction innerLambda [undefInt, undefInt]
+  -- log $ show $ al aba [unknownT, ctString "sda"]
+  -- log $ errorOrFunction complex [unknownT, ctString "120"]
     
 

@@ -9,6 +9,7 @@ import Data.Maybe (Maybe(Just, Nothing))
 import Data.String (joinWith)
 import Data.Traversable (sequence)
 import Data.Tuple (Tuple, uncurry)
+import Debug.Trace (spy)
 import Partial.Unsafe (unsafePartial)
  
 
@@ -121,7 +122,7 @@ polyLambda name args result lams = Type {t: Lambda {name, args, result, f,
     in case mapMaybe ignoreError lams of 
       [one] -> pure one 
       [] -> throwError $ Expected "To match a lambda"
-      _ -> throwError $ Expected "Types to be more specific"
+      a -> throwError $ Expected "Types to be more specific"
 
 
 lambda :: String 
