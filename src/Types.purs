@@ -18,6 +18,7 @@ data Errors = Expected String
   | MissingArg String 
   | TooManyArgs Int Int
   | FailedUnification
+  | NoNative
 
 data TypeFlags = UnifyWith String 
 
@@ -182,7 +183,8 @@ instance showError :: Show Errors where
     (MissingArg msg) -> "Missing argument to function: " <> msg
     (TooManyArgs actual expected) -> "Too many arguments to function, expected" 
         <> show expected <> " but got " <> show actual
-    (FailedUnification) -> "Failed to unify types"
+    FailedUnification -> "Failed to unify types"
+    NoNative -> "No native representation"
 
 instance showTypeT :: Show TypeT where 
   show = case _ of
