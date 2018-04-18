@@ -33,7 +33,8 @@ type NativeContext = {const :: Type -> Maybe NativeExpr, local :: NativeExpr -> 
 data Type = Type {t :: TypeT, refs :: Int }
 
 type LambdaR = { name :: String, args :: Array Type, result :: Type, 
-      f :: Array Type -> Either Errors Type, frt :: Array (Tuple Type NativeExpr) -> Type -> NativeContext -> Either Errors NativeExpr }
+      f :: Array Type -> Either Errors Type, 
+      frt :: Array (Tuple Type NativeExpr) -> Type -> NativeContext -> Either Errors NativeExpr }
 
 data TypeT = 
     UnknownT 

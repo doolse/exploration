@@ -62,6 +62,7 @@ emptyFunction = {params:[], stmts:[]}
 type JSContextR s = { newLocal :: JSExpr -> JSRuntimeGen s JSExpr }
 newtype JSContext s = JSContext (JSContextR s)
 
+exprToString :: JSExpr -> String
 exprToString (Local l) = l 
 exprToString (JSString s) = "\"" <> s <> "\""
 exprToString (JSInt i) = show i
@@ -69,6 +70,7 @@ exprToString (InfixFuncApp n a b) = exprToString a <> n <> exprToString b
 exprToString (JSAnonFunc {params, stmts}) =  "function(" <> (joinWith "," params) <> ") {\n" <> 
         joinWith "\n" (stmtToString <$> stmts) <> "\n}\n"
 
+stmtToString :: JSStatement -> String
 stmtToString (Return expr) = "return " <> exprToString expr <> ";"
 stmtToString (AssignVar v expr) = "var " <> v <> " = " <> exprToString expr <> ";"
 

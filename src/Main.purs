@@ -123,31 +123,8 @@ type App = {name :: String, f :: ArgLens -> LamState LType, args :: ArgLens, res
 
 type StateLambda = {args :: ArgLens, apps :: Array App}
 
--- typeOnly :: forall s. String -> Type -> LType s
--- typeOnly n t = Tuple t \_ _ -> throwError $ Expected $ "A native representation for " <> n 
-
 constExpr :: forall s. Type -> NativeExpr -> LType
 constExpr t ne = Tuple t $ Left ne
-
--- ixUn :: forall s. Int -> ArgLens s -> Lens' s (LType s)
--- ixUn i o = cloneLens o <<< (unsafePartial $ lens' \arr -> Tuple (unsafeIndex arr i) 
---         (\lt -> fromJust $ updateAt i lt arr))
-
--- ltIx :: forall a. Int -> Lens' LTypeArray (LType LTypeArray)
--- ltIx i = unsafePartial $ lens' \(LTypeArray arr) -> Tuple (unsafeIndex arr i) 
---         (\lt -> LTypeArray $ fromJust $ updateAt i lt arr) 
-
--- argl :: forall s. Array (ALens' s (LType s)) -> ArgLens s
--- argl la = lens' \s -> Tuple ((\l -> view (cloneLens l) s) <$> la) 
---             (\ta -> foldr doset s (zip la ta))
---   where 
---   doset (Tuple l v) = set (cloneLens l) v
-
--- cl :: forall s a. Type -> Lens' s (LType s)
--- cl t = lens' \s -> Tuple (c t) (const s)
-
--- c :: forall s a. Type -> LType s
--- c a = Tuple a (\t ctx -> maybe (throwError $ Expected $ "A constant for" <> show t) pure $ ctx.const t)
 
 capp :: forall s. String -> Type -> ArgLens -> Maybe TypeRef -> App
 capp name lam args result = {name, f: runStateless, args, result}
@@ -159,11 +136,10 @@ capp name lam args result = {name, f: runStateless, args, result}
     pure $ Tuple r.result $ Right \t ctx -> case ctx.const $ spy t of 
       Just c -> pure c
       Nothing -> do 
-        argsLTypes <- getLTypes al
+        traceAnyA {result, rc: refCount t, name}
         let mkArg (Tuple t mkNative) = Tuple t <$> (mkNative # either pure (\f -> f t ctx))
-        stateArgs <- traverse mkArg argsLTypes
+        stateArgs <- traverse (getLType >=> mkArg) al
         ne <- lift $ r.frt stateArgs t ctx
-        traceAnyA {result, rc: refCount t}
         (guard (refCount t > 1) *> result) # maybe (pure ne) \resRef -> 
           let loc = ctx.local ne in setOne (constExpr t loc) resRef *> pure loc
 
@@ -176,7 +152,7 @@ applyIt phase ap = do
   lt <- ap.f ap.args
   maybe (pure unit) (modifyOne $ const lt) ap.result 
   news <- get 
-  let _ = spy {phase, name: ap.name, news} 
+  -- let _ = spy {phase, name: ap.name, news} 
   pure $ lt
 
 runCT :: Array App -> LamState LType
