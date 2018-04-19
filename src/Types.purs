@@ -29,7 +29,7 @@ data PrimType = PInt | PString
 
 derive instance pEq :: Eq PrimType
 
-type NativeContext m = {const :: Type -> Maybe NativeExpr, local :: m NativeExpr -> (m (m NativeExpr)) }
+type NativeContext m = {const :: Type -> Maybe NativeExpr, local :: NativeExpr -> m NativeExpr }
 
 newtype NativeGenerator = NativeGenerator (forall m. MonadThrow Errors m => Array (Tuple Type NativeExpr) -> Type -> NativeContext m -> m NativeExpr)
 

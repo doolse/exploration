@@ -83,11 +83,10 @@ genFunc init rgen = mkFunc $ runState (runExceptT rgen) init
   where 
   mkFunc (Tuple e fb) = map (anonFunc fb) e
 
-newLocal :: JS JSExpr -> JS (JS JSExpr)
-newLocal expr = do 
+newLocal :: JSExpr -> JS JSExpr
+newLocal e = do 
   {stmts} <- get
-  e <- expr
   let newName = "v" <> (show $ length stmts)
   modify _ {stmts = snoc stmts $ AssignVar newName e}
-  pure $ pure $ Reference newName
+  pure $ Reference newName
   
