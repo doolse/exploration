@@ -2,68 +2,63 @@ module Javascript where
 
 import Prelude
 
+import Control.Monad.Except (ExceptT(..), runExceptT)
 import Control.Monad.Reader (ReaderT, ask, runReaderT)
-import Control.Monad.State (State, get, modify, runState)
+import Control.Monad.State (State, StateT(..), get, modify, runState, runStateT)
+import Control.Monad.Writer (Writer, WriterT(..), runWriterT, tell)
 import Data.Array (length, snoc, unsafeIndex)
-import Data.Maybe (Maybe(..), maybe)
+import Data.Either (Either)
+import Data.Lens (modifying, over)
+import Data.Lens.Iso.Newtype (_Newtype)
+import Data.List (List)
+import Data.Maybe (Maybe(..), maybe, maybe')
+import Data.Monoid (class Monoid)
+import Data.Newtype (class Newtype)
 import Data.String (joinWith)
 import Data.Tuple (Tuple(..), snd)
 import Partial.Unsafe (unsafePartial)
-import Types (NativeExpr, Type(Type), TypeT(StringT, IntT))
+import Types (Errors, NativeExpr, Type(Type), TypeT(StringT, IntT))
 import Unsafe.Coerce (unsafeCoerce)
 
 data JSExpr =
-     Local String
+     Reference String
    | JSInt Int
    | JSString String
    | InfixFuncApp String JSExpr JSExpr 
    | JSAnonFunc JSFunctionBody
 
-type JSRuntimeGen s = ReaderT (JSContext s) (State s)
+type JS = ExceptT Errors (State JSFunctionBody)
 
-constJS :: JSExpr -> NativeExpr 
-constJS e = nativeJS $ pure e
-
-nativeJS :: forall s. (JSRuntimeGen s JSExpr) -> NativeExpr
+nativeJS :: JSExpr -> NativeExpr 
 nativeJS = unsafeCoerce
 
-fromNative :: NativeExpr -> (forall s. JSRuntimeGen s JSExpr)
+fromNative :: NativeExpr -> JSExpr
 fromNative = unsafeCoerce
 
-jsArg :: forall s. Array (Tuple Type NativeExpr) -> Int -> (JSRuntimeGen s JSExpr)
+jsArg :: Array (Tuple Type NativeExpr) -> Int -> JSExpr
 jsArg arr i = fromNative $ snd $ (unsafePartial $ unsafeIndex arr i)
 
-
-typeToJS :: forall s. Type -> Maybe JSExpr
+typeToJS :: Type -> Maybe JSExpr
 typeToJS (Type {t}) = case t of 
   (IntT (Just a)) -> pure $ JSInt a
   (StringT (Just s)) -> pure $ JSString s
   _ -> Nothing
-
-withCtx :: forall s a. (JSContextR s -> JSRuntimeGen s a) -> JSRuntimeGen s a 
-withCtx f = ask >>= \(JSContext c) -> f c 
-
-newLocal :: forall s. JSExpr -> JSRuntimeGen s JSExpr 
-newLocal e = withCtx (\a -> a.newLocal e)
 
 data JSStatement = 
   Return JSExpr | AssignVar String JSExpr
 
 type JSFunctionBody = { params:: Array String, stmts :: Array JSStatement }
 
-anonFunc :: JSExpr -> JSFunctionBody -> JSExpr 
-anonFunc r b = JSAnonFunc $ return r b 
-
-return :: JSExpr -> JSFunctionBody -> JSFunctionBody
-return e fb = fb {stmts = snoc fb.stmts $ Return e }
- 
 emptyFunction = {params:[], stmts:[]}
 
-type JSContextR s = { newLocal :: JSExpr -> JSRuntimeGen s JSExpr }
-newtype JSContext s = JSContext (JSContextR s)
+anonFunc :: JSFunctionBody -> JSExpr -> JSExpr 
+anonFunc b = JSAnonFunc <<< return b
 
+return :: JSFunctionBody -> JSExpr -> JSFunctionBody
+return fb e = fb {stmts = snoc fb.stmts $ Return e }
+ 
 exprToString :: JSExpr -> String
-exprToString (Local l) = l 
+exprToString (Reference l) = l 
 exprToString (JSString s) = "\"" <> s <> "\""
 exprToString (JSInt i) = show i
 exprToString (InfixFuncApp n a b) = exprToString a <> n <> exprToString b
@@ -74,26 +69,25 @@ stmtToString :: JSStatement -> String
 stmtToString (Return expr) = "return " <> exprToString expr <> ";"
 stmtToString (AssignVar v expr) = "var " <> v <> " = " <> exprToString expr <> ";"
 
-constOrArg :: Type -> State JSFunctionBody JSExpr 
-constOrArg t = maybe newArg pure $ typeToJS t
-
-newArg :: State JSFunctionBody JSExpr 
-newArg = do 
-  {params} <- get
-  let newName = "p" <> (show $ length params)
-  modify _ {params = snoc params newName}
-  pure $ Local newName
-
-genFunc :: JSFunctionBody -> JSRuntimeGen JSFunctionBody JSExpr -> JSExpr
-genFunc init rgen = let (Tuple ret body) = runState (runReaderT rgen functionContext) init
-  in anonFunc ret body
-
-functionContext :: JSContext JSFunctionBody
-functionContext = JSContext {newLocal} 
+constOrArg :: Type -> JS JSExpr
+constOrArg t = maybe' (\_ -> createArg) pure $ typeToJS t
   where 
-    newLocal expr = do 
-      {stmts} <- get
-      let newName = "v" <> (show $ length stmts)
-      modify _ {stmts = snoc stmts $ AssignVar newName expr}
-      pure $ Local newName
+  createArg = do 
+    {params} <- get
+    let newName = "p" <> (show $ length params)
+    modify _ {params = snoc params newName}
+    pure $ Reference newName
+
+genFunc :: JSFunctionBody -> JS JSExpr -> Either Errors JSExpr
+genFunc init rgen = mkFunc $ runState (runExceptT rgen) init
+  where 
+  mkFunc (Tuple e fb) = map (anonFunc fb) e
+
+newLocal :: JS JSExpr -> JS (JS JSExpr)
+newLocal expr = do 
+  {stmts} <- get
+  e <- expr
+  let newName = "v" <> (show $ length stmts)
+  modify _ {stmts = snoc stmts $ AssignVar newName e}
+  pure $ pure $ Reference newName
   

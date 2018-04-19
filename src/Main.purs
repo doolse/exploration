@@ -6,9 +6,11 @@ import Control.Alt ((<|>))
 import Control.Apply (applySecond)
 import Control.Monad.Eff (Eff)
 import Control.Monad.Eff.Console (CONSOLE, log)
-import Control.Monad.Error.Class (throwError)
+import Control.Monad.Error.Class (class MonadThrow, throwError)
+import Control.Monad.Except (runExceptT)
 import Control.Monad.Reader (ask, lift)
 import Control.Monad.State (class MonadState, State, StateT, evalState, evalStateT, execState, execStateT, get, modify, runState, runStateT, state)
+import Control.Monad.Writer (runWriterT)
 import Control.MonadZero (guard)
 import Data.Array (catMaybes, foldl, foldr, fromFoldable, mapWithIndex, replicate, unsafeIndex, updateAt, updateAtIndices, zip)
 import Data.Bifunctor (bimap, rmap)
@@ -21,25 +23,26 @@ import Data.Lens.Record (prop)
 import Data.List (List(..))
 import Data.List.Lazy (range)
 import Data.Maybe (Maybe(..), fromJust, maybe, maybe')
+import Data.Monoid (mempty)
 import Data.Newtype (class Newtype)
 import Data.Symbol (SProxy(..))
-import Data.Traversable (traverse, traverse_)
+import Data.Traversable (sequence, traverse, traverse_)
 import Data.TraversableWithIndex (traverseWithIndex)
 import Data.Tuple (Tuple(Tuple), fst, snd, uncurry)
 import Debug.Trace (spy, traceAnyA)
-import Javascript (JSContext(..), JSExpr(InfixFuncApp), constJS, constOrArg, emptyFunction, exprToString, fromNative, genFunc, jsArg, nativeJS, typeToJS)
+import Javascript (JS, JSExpr(..), anonFunc, constOrArg, emptyFunction, exprToString, fromNative, genFunc, jsArg, nativeJS, newLocal, typeToJS)
 import Partial.Unsafe (unsafePartial)
-import Types (Errors(..), LambdaR, NativeContext, NativeExpr, PrimType(..), Type, TypeT(Lambda), applyLambda, arr, checkArgs, ctInt, ctString, incRef, intValue, lambda, lambdaR, polyLambda, refCount, resultType, strValue, typeT, undefInt, undefPrim, undefString, unknownT)
+import Types (Errors(..), LambdaR, NativeContext, NativeExpr, NativeGenerator(..), PrimType(..), Type, TypeT(Lambda), applyLambda, arr, checkArgs, ctInt, ctString, incRef, intValue, lambda, lambdaR, polyLambda, refCount, resultType, strValue, typeT, undefInt, undefPrim, undefString, unknownT)
 import Unsafe.Coerce (unsafeCoerce)
 
 
 mulInt :: Type
 mulInt = lambda "*" [undefInt, undefInt] undefInt doMult doRT
   where 
-  doRT args toNE out = pure $ nativeJS do 
-    a <- jsArg args 0
-    b <- jsArg args 1 
-    pure $ InfixFuncApp " * " a b
+  doRT = NativeGenerator \args toNE out -> do 
+    let a = jsArg args 0
+        b = jsArg args 1 
+    pure $ nativeJS $ InfixFuncApp " * " a b
 
   doMult args = do 
     a <- incRef <$> arr 0 args
@@ -52,7 +55,7 @@ mulInt = lambda "*" [undefInt, undefInt] undefInt doMult doRT
 addString :: Type 
 addString = lambda "+" [undefString, undefString] undefString doAddStr doAddStrRT 
   where 
-  doAddStr args  = do 
+  doAddStr args = do 
     a <- incRef <$> arr 0 args
     b <- incRef <$> arr 1 args 
     let result = case {a,b} of 
@@ -60,10 +63,10 @@ addString = lambda "+" [undefString, undefString] undefString doAddStr doAddStrR
           _ -> undefString
     pure $ {args:[a,b], result}
 
-  doAddStrRT args toNE out = pure $ nativeJS do
-    a <- jsArg args 0
-    b <- jsArg args 1 
-    pure $ InfixFuncApp " + " a b
+  doAddStrRT = NativeGenerator \args toNE out -> do
+    let a = jsArg args 0
+        b = jsArg args 1 
+    pure $ nativeJS $ InfixFuncApp " + " a b
   
 add :: Type 
 add = polyLambda "+" [unknownT, unknownT] unknownT [addInt, addString]
@@ -71,10 +74,10 @@ add = polyLambda "+" [unknownT, unknownT] unknownT [addInt, addString]
 addInt :: Type
 addInt = lambda "+" [undefInt, undefInt] undefInt doMult doRT
   where 
-  doRT args toNE out = pure $ nativeJS do
-    a <- jsArg args 0
-    b <- jsArg args 1 
-    pure $ InfixFuncApp " + " a b
+  doRT = NativeGenerator \args toNE out -> do
+    let a = jsArg args 0
+        b = jsArg args 1 
+    pure $ nativeJS $ InfixFuncApp " + " a b
 
   doMult args = do 
     a <- incRef <$> arr 0 args
@@ -87,17 +90,17 @@ addInt = lambda "+" [undefInt, undefInt] undefInt doMult doRT
 type FuncState = { o :: Type }
 
 errorOrFunction :: Type -> Array Type -> String 
-errorOrFunction l args = 
-  let mkFunc (Tuple fb r) = exprToString (genFunc fb $ fromNative r)
-      const = typeToJS >>> map constJS
-      local e = nativeJS do 
-        expr <- fromNative e
-        (JSContext ctx) <- ask
-        ctx.newLocal expr 
-  in either show mkFunc $ do 
-        {frt,args:pargs} <- applyLambda l args >>= lambdaR
-        let (Tuple t fb) = runState (traverse constOrArg pargs) emptyFunction
-        Tuple fb <$> frt (zip pargs $ constJS <$> t) unknownT {const, local}
+errorOrFunction l args = either show id do
+  {frt: NativeGenerator f, args:aargs} <- applyLambda l args >>= lambdaR
+  let const = map nativeJS <$> typeToJS
+      local e = map nativeJS <$> (newLocal (fromNative <$> e))
+      natArg t = nativeJS >>> Tuple t <$> constOrArg t
+      funcBody = do 
+        nargs <- traverse natArg aargs
+        f nargs unknownT {const,local}
+  let (Tuple errorOrlast fb) = emptyFunction # runState (runExceptT funcBody)
+  last <- errorOrlast
+  pure $ exprToString $ anonFunc fb (fromNative last)
 
 al = applyLambda
 lr = resultType
@@ -109,7 +112,8 @@ larg i t = case typeT t of
 
 type TypeRef = Int 
 type LamState = StateT LambdaState (Either Errors)
-type NativeCreate = Type -> NativeContext -> LamState NativeExpr
+newtype NativeCreate = NativeCreate (forall m. MonadThrow Errors m => Type -> NativeContext m -> NativeCreate -> 
+  LamState (m (Tuple NativeCreate NativeExpr)))
 
 newtype LambdaState = LambdaState (Array LType)
 
@@ -117,14 +121,31 @@ derive instance lsNT :: Newtype LambdaState _
 
 type ArgLens = Array TypeRef
 
-type LType = Tuple Type (Either NativeExpr NativeCreate)
+type LType = Tuple Type NativeCreate
+
+noNative :: Type -> LType 
+noNative t = Tuple t (NativeCreate \_ _ c -> throwError $ NoNative)
+
+constNative :: NativeExpr -> NativeCreate 
+constNative ne = NativeCreate \_ _ c -> pure $ pure (Tuple c ne)
+
+withNative :: Type -> NativeExpr -> LType 
+withNative t ne = Tuple t $ constNative ne
+
+constOrError :: Type -> LType 
+constOrError t = Tuple t (NativeCreate \t ctx c -> pure $ maybe (throwError NoNative) (Tuple c >>> pure) $ ctx.const t)
 
 type App = {name :: String, f :: ArgLens -> LamState LType, args :: ArgLens, result :: Maybe TypeRef }
 
 type StateLambda = {args :: ArgLens, apps :: Array App}
 
-constExpr :: forall s. Type -> NativeExpr -> LType
-constExpr t ne = Tuple t $ Left ne
+-- convertToM :: forall m. MonadThrow Errors m => NativeContext m -> Array LType -> m (LamState (Array (Tuple Type NativeExpr)))
+-- convertToM ctx args = sequence <$> traverse mkNative args
+--   where 
+--   mkNative :: LType -> m (LamState (Tuple Type NativeExpr))
+--   mkNative (Tuple t (NativeCreate nc)) = map (Tuple t) <$> nc t ctx
+
+
 
 capp :: forall s. String -> Type -> ArgLens -> Maybe TypeRef -> App
 capp name lam args result = {name, f: runStateless, args, result}
@@ -133,15 +154,48 @@ capp name lam args result = {name, f: runStateless, args, result}
     args <- getTypes al
     r <- lift $ applyLambda lam args >>= lambdaR 
     typesOnly al r.args
-    pure $ Tuple r.result $ Right \t ctx -> case ctx.const $ spy t of 
-      Just c -> pure c
-      Nothing -> do 
-        traceAnyA {result, rc: refCount t, name}
-        let mkArg (Tuple t mkNative) = Tuple t <$> (mkNative # either pure (\f -> f t ctx))
-        stateArgs <- traverse (getLType >=> mkArg) al
-        ne <- lift $ r.frt stateArgs t ctx
-        (guard (refCount t > 1) *> result) # maybe (pure ne) \resRef -> 
-          let loc = ctx.local ne in setOne (constExpr t loc) resRef *> pure loc
+    pure $ Tuple r.result $ NativeCreate \t ctx c -> 
+      let inlineCall = do
+            let (NativeGenerator genRuntime) = r.frt
+                creators (Tuple t nc@(NativeCreate f)) = Tuple t <$> f t ctx nc
+            args <- traverse (getLType >=> creators) al
+            {expr, changes} <- pure $ do 
+              let toNative (Tuple t mne) = Tuple t <$> mne
+              actualArgs <- traverse toNative args
+              expr <- genRuntime (rmap snd <$> actualArgs) t ctx
+              pure $ {expr, changes: snd >>> fst <$> actualArgs}
+            pure expr
+    
+      in case t of 
+        t | Just ref <- guard (refCount t > 1) *> result -> do 
+            expr <- inlineCall
+            -- setOne (Tuple t $ NativeCreate \t ctx -> pure $ pure $ unsafeCoerce $ expr) ref
+            -- pure $ expr
+            pure $ do 
+              joined <- ctx.local expr
+              now <- joined
+              pure $ Tuple (constNative now) now
+        t -> map (Tuple c) <$> inlineCall
+
+      -- NativeCreate \t ctx -> case ctx.const $ spy t of 
+      -- Just c -> pure $ pure c
+      -- Nothing -> do 
+      --   traceAnyA {result, rc: refCount t, name}
+      --   -- argLTypes <- pure $ traverse getLType al
+      --   -- stateArgs <- convertToM ctx argLTypes
+      --   let (NativeGenerator genRuntime) = r.frt
+      --   let stateSide = do 
+      --         argLTypes <- traverse getLType al
+      --   map pure $ do  
+      --     genRuntime ?o t ctx
+      --   -- argLTypes <- lift $ traverse getLType al
+      --   -- stateArgs <- convertToM ctx argLTypes
+      --   -- let (NativeGenerator genRuntime) = r.frt
+      --   -- let exprGen = stateArgs >>= \a -> genRuntime a t ctx
+      --   -- (guard (refCount t > 1) *> result) # maybe (pure $ exprGen) \resRef -> do
+      --   --   -- let localVar = ctx.local exprGen
+      --   --   setOne (Tuple r.result $ NativeCreate \_ _ -> pure $ unsafeCoerce $ exprGen >>= ctx.local ) resRef
+      --   --   pure $ unsafeCoerce $ exprGen >>= ctx.local
 
 appLocal :: forall s. String -> (ArgLens -> LamState LType) -> ArgLens -> Maybe TypeRef -> App
 appLocal name f args result = {name, f , args, result}
@@ -162,12 +216,11 @@ runCT apps = do
   run >>= maybe (throwError $ Expected "") pure
 
 typeArr :: Int -> LambdaState
-typeArr len = LambdaState $ replicate len (Tuple unknownT $ Right \_ _ -> throwError $ NoNative)
+typeArr len = LambdaState $ replicate len (noNative unknownT) 
 
 constants :: ArgLens -> Array Type -> LambdaState -> LambdaState 
 constants al t = execState $ traverse_ mkConstant $ zip al t
-  where mkConstant (Tuple i t) = modifyOne (\_ -> Tuple t $ Right mkNativeConst) i 
-        mkNativeConst t ctx = maybe (throwError NoNative) pure $ ctx.const t
+  where mkConstant (Tuple i t) = modifyOne (\_ -> constOrError t) i 
 
 aix :: Int -> ArgLens -> TypeRef
 aix i arr = unsafePartial $ unsafeIndex arr i 
@@ -200,12 +253,11 @@ ct sl args = do
 ctt :: LambdaState -> StateLambda -> Array Type -> Either Errors {args:: Array Type, result :: Type}
 ctt initial lam args = evalStateT (ct lam args) initial
 
-rt :: LambdaState -> StateLambda -> Array (Tuple Type NativeExpr) -> Type -> NativeContext -> Either Errors NativeExpr
-rt initial lam nargs t ctx = initial # evalStateT do 
-  traverseWithIndex_ (\i t -> setOne (bimap id Left t) i) nargs
-  (Tuple _ ne) <- runCT lam.apps
-  s <- get
-  either pure (\nc -> lift $ evalStateT (nc t ctx) s) ne 
+rt :: LambdaState -> StateLambda -> NativeGenerator
+rt initial lam = NativeGenerator \nargs t ctx -> either throwError id $ initial # evalStateT do
+  traverse_ (\(Tuple i (Tuple t ne)) -> setOne (withNative t ne) i) $ zip lam.args nargs -- traverseWithIndex_ (\i (Tuple t ) -> setOne t (NativeCreate \_ _ -> pure i) nargs
+  (Tuple t nc@(NativeCreate f)) <- runCT lam.apps
+  map snd <$> f t ctx nc
   
 aba :: Type 
 aba = lambda "aba" [unknownT, unknownT] unknownT (ctt initial body) (rt initial body)

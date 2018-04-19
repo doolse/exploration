@@ -2,6 +2,7 @@ module Types where
 
 import Prelude
 
+import Control.Monad.Error.Class (class MonadThrow)
 import Control.Monad.Except (throwError)
 import Data.Array (index, length, mapMaybe, zip)
 import Data.Either (Either, either, fromRight)
@@ -28,13 +29,15 @@ data PrimType = PInt | PString
 
 derive instance pEq :: Eq PrimType
 
-type NativeContext = {const :: Type -> Maybe NativeExpr, local :: NativeExpr -> NativeExpr}
+type NativeContext m = {const :: Type -> Maybe NativeExpr, local :: m NativeExpr -> (m (m NativeExpr)) }
+
+newtype NativeGenerator = NativeGenerator (forall m. MonadThrow Errors m => Array (Tuple Type NativeExpr) -> Type -> NativeContext m -> m NativeExpr)
 
 data Type = Type {t :: TypeT, refs :: Int }
 
 type LambdaR = { name :: String, args :: Array Type, result :: Type, 
       f :: Array Type -> Either Errors Type, 
-      frt :: Array (Tuple Type NativeExpr) -> Type -> NativeContext -> Either Errors NativeExpr }
+      frt ::  NativeGenerator}
 
 data TypeT = 
     UnknownT 
@@ -120,7 +123,7 @@ polyLambda :: String
   -> Array Type
   -> Type
 polyLambda name args result lams = Type {t: Lambda {name, args, result, f, 
-  frt: \_ _ _ -> throwError $ Expected ""}, refs:0}
+  frt: NativeGenerator \_ _ _ -> throwError $ Expected ""}, refs:0}
   where 
   f newargs = 
     let ignoreError l = either (const Nothing) Just $ applyLambda l newargs
@@ -142,7 +145,7 @@ lambda :: String
   -> Array Type 
   -> Type 
   -> (Array Type -> Either Errors {args::Array Type, result::Type}) 
-  -> (Array (Tuple Type NativeExpr) -> Type -> NativeContext -> Either Errors NativeExpr)
+  -> NativeGenerator
   -> Type
 lambda name args result app frt = Type {t: Lambda {name, args, result, f: f 1 args, frt }, refs:0}
   where 
