@@ -276,6 +276,8 @@ complex = lambda "complex" [undefInt, undefInt] undefInt (ctt initial body) (rt 
 --   let cacb = ca + cb
 --   cacb + o   
 -- }  
+-- let i = \a -> \b -> let o = b * 3 in let c = \d -> d * 5 + o in c a + c b + o in i 34 2
+
 innerLambda :: Type 
 innerLambda = lambda "innerLambda" [undefInt, undefInt] undefInt (ctt initial body) (rt initial body) 
   where 
@@ -316,7 +318,7 @@ main = do
   -- let stateFul :: Type 
   --     stateFul = lambda "State" UnknownT  consts body 
 
-  log $ errorOrFunction innerLambda [unknownT, unknownT]
+  log $ errorOrFunction innerLambda [ctInt 34, ctInt 2]
   -- log $ show $ al aba [unknownT, ctString "sda"]
   -- log $ errorOrFunction complex [unknownT, ctString "120"]
     

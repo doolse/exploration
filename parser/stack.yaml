@@ -1,0 +1,6 @@
+resolver: lts-8.24
+packages:
+- '.'
+extra-deps: [vty-5.21]
+flags: {}
+extra-package-dbs: []
