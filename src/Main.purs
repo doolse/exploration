@@ -28,6 +28,7 @@ import Data.Symbol (SProxy(..))
 import Data.Traversable (sequence, traverse, traverse_)
 import Data.TraversableWithIndex (traverseWithIndex)
 import Data.Tuple (Tuple(Tuple), fst, snd, uncurry)
+import Debug.Trace (traceAnyA)
 import Javascript (JSExpr(..), anonFunc, constOrArg, emptyFunction, exprToString, fromNative, jsArg, nativeJS, newLocal, typeToJS)
 import Partial.Unsafe (unsafePartial)
 import Types (Errors(Expected, NoNative), NativeContext, NativeExpr, NativeGenerator(NativeGenerator), Type(..), TypeT(Lambda), applyLambda, arr, ctInt, ctString, incRef, intValue, lambda, lambdaR, polyLambda, refCount, strValue, typeT, undefInt, undefString, unknownT)
@@ -216,7 +217,9 @@ ctt initial lam args = evalStateT (ct lam args) initial
 rt :: LambdaState -> StateLambda -> NativeGenerator
 rt initial lam = NativeGenerator \nargs t ctx -> either throwError id $ initial # evalStateT do
   traverse_ (\(Tuple i (Tuple t ne)) -> setOne (withNative t ne) i) $ zip lam.args nargs
+  get >>= traceAnyA
   (Tuple t (NativeCreate f)) <- runCT lam.apps
+  get >>= traceAnyA
   (evalStateT $ f t ctx) <$> get
   
 aba :: Type 
@@ -313,7 +316,7 @@ main = do
   -- let stateFul :: Type 
   --     stateFul = lambda "State" UnknownT  consts body 
 
-  log $ errorOrFunction innerLambda [unknownT, ctInt 0]
+  log $ errorOrFunction innerLambda [unknownT, unknownT]
   -- log $ show $ al aba [unknownT, ctString "sda"]
   -- log $ errorOrFunction complex [unknownT, ctString "120"]
     
