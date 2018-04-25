@@ -115,31 +115,20 @@ innerLambda = lambda "innerLambda" [undefInt, undefInt] undefInt (ctt initial bo
    ] }
 
 -- Have to make it combine the 
-process :: String -> IO ()
+process :: String -> Type
 process input = do
-  let tokens = parseTokens input
-  putStrLn ("Tokens: " ++ show tokens)
-  let ast = parseExpr input
-  putStrLn ("Syntax: " ++ show ast)
-  case ast of
+  case parseExpr input of
     Left err -> do
-      putStrLn "Parse Error:"
-      print err
-    Right ast -> putStrLn $ show $ runState (convertExpr ast) 
-      ExprState {_currentExpr=NoExpr, _names=Map.empty, _exprArgs=[], 
-      _typeCount = 0, _constantTypes = []}
-
-exec :: S.Expr -> IO ()
-exec ast = do
-  let result = runEval ast
-  case result of
-    Left err -> do
-      putStrLn "Runtime Error:"
-      putStrLn err
-    Right res -> print res
+      error err
+    Right ast -> evalState (convertExpr ast) 
+      ExprState {_names=Map.empty, _applics=[], _typeCount = 0, _constantTypes = []}
 
 main :: IO ()
-main = process "\\a -> \\b -> let o = b * 3 in let c = \\d -> d * 5 + o in c a + c b + o"
+main = do
+  let parsed = process "\\a -> \\b -> let o = b * 3 in a * o + o"
+    -- process "\\a -> \\b -> let o = b * 3 in let c = \\d -> d * 5 + o in c a + c b + o"
+  putStrLn $ errorOrFunction parsed [unknownT, unknownT]
+  -- process "\\a -> \\b -> let o = b * 3 in let c = \\d -> d * 5 + o in c a + c b + o"
 -- runInputT defaultSettings loop
 --   where
   

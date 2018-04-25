@@ -65,7 +65,7 @@ type ArgLens = [TypeRef]
 data App = App {name :: String, f :: ArgLens -> LamState LType, args :: ArgLens, result :: Maybe TypeRef }
 
 instance Show App where 
-  show App {name} = name
+  show App {name,args,result} = name <> " args:" <> show args <> " result:" <> show result
 
 data StateLambda = StateLambda {args :: ArgLens, apps :: [App]}
     
