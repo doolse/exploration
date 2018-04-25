@@ -124,21 +124,20 @@ process input = do
       ExprState {_names=Map.empty, _applics=[], _typeCount = 0, _constantTypes = []}
 
 main :: IO ()
-main = do
-  let parsed = process "\\a -> \\b -> let o = b * 3 in let c = a + b in c + o + (c * o * a)"
+main = runInputT defaultSettings loop
+  -- let parsed = process "\\a -> \\b -> let o = b * 3 in let c = a + b in c + o + (c * o * a)"
     -- process "\\a -> \\b -> let c = \\d -> d * 5 in c a + c b"
     -- process "\\a -> \\b -> let o = b * 3 in a + o"
     
-  putStrLn $ errorOrFunction parsed [unknownT, unknownT]
+  -- putStrLn $ errorOrFunction parsed [unknownT, unknownT]
   -- process "\\a -> \\b -> let o = b * 3 in let c = \\d -> d * 5 + o in c a + c b + o"
--- runInputT defaultSettings loop
---   where
-  
-  -- loop = do
-  --   minput <- getInputLine "Happy> "
-  --   case minput of
-  --     Nothing -> outputStrLn "Goodbye."
-  --     Just input -> (liftIO $ process input) >> loop
+
+  where
+  loop = do
+    minput <- getInputLine "Happy> "
+    case minput of
+      Nothing -> outputStrLn "Goodbye."
+      Just input -> (liftIO $ putStrLn $ errorOrFunction (process input) [unknownT, ctInt 45]) >> loop
 
     
 
