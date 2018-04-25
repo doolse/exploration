@@ -79,40 +79,40 @@ import NativeJavascript
 -- -- }  
 -- -- let i = \a -> \b -> let o = b * 3 in let c = \d -> d * 5 + o in c a + c b + o in i 34 2
 
-innerLambda :: Type 
-innerLambda = lambda "innerLambda" [undefInt, undefInt] undefInt (ctt initial body) (rt initial body) 
-  where 
-  _a = 0
-  _b = 1
-  _o = 2
-  _ca = 3
-  _cb = 4
-  _cacb = 5
-  _car = 6
-  _cbr = 7
-  _c1_c = 8 
-  _o_a2 = 9
+-- innerLambda :: Type 
+-- innerLambda = lambda "innerLambda" [undefInt, undefInt] undefInt (ctt initial body) (rt initial body) 
+--   where 
+--   _a = 0
+--   _b = 1
+--   _o = 2
+--   _ca = 3
+--   _cb = 4
+--   _cacb = 5
+--   _car = 6
+--   _cbr = 7
+--   _c1_c = 8 
+--   _o_a2 = 9
 
-  initial = constants [_c1_c, _o_a2] [ctInt 5, ctInt 3] $ typeArr 10
+--   initial = constants [_c1_c, _o_a2] [ctInt 5, ctInt 3] $ typeArr 10
 
-  lamC :: TypeRef -> ArgLens -> LamState LType
-  lamC l args = do 
-    result <- runCT apps
-    pure result
-    where 
-    apps = [
-        capp "c1" mulInt [aix 0 args, _c1_c] $ pure l, 
-        capp "cresult" add [l, _o] Nothing
-      ]
+--   lamC :: TypeRef -> ArgLens -> LamState LType
+--   lamC l args = do 
+--     result <- runCT apps
+--     pure result
+--     where 
+--     apps = [
+--         capp "c1" mulInt [aix 0 args, _c1_c] $ pure l, 
+--         capp "cresult" add [l, _o] Nothing
+--       ]
 
-  body :: StateLambda
-  body = StateLambda {args = [_a, _b], apps = [
-    capp "o" mulInt [_b, _o_a2] $ pure _o,    
-    appLocal "a5" (lamC _car) [_a] $ pure _ca,
-    appLocal "cb" (lamC _cbr) [_b] $ pure _cb,
-    capp "cacb" add [_ca, _cb] $ pure _cacb,
-    capp "result" add [_cacb, _o] $ Nothing
-   ] }
+--   body :: StateLambda
+--   body = StateLambda {args = [_a, _b], apps = [
+--     capp "o" mulInt [_b, _o_a2] $ pure _o,    
+--     appLocal "a5" (lamC _car) [_a] $ pure _ca,
+--     appLocal "cb" (lamC _cbr) [_b] $ pure _cb,
+--     capp "cacb" add [_ca, _cb] $ pure _cacb,
+--     capp "result" add [_cacb, _o] $ Nothing
+--    ] }
 
 -- Have to make it combine the 
 process :: String -> Type
@@ -125,8 +125,10 @@ process input = do
 
 main :: IO ()
 main = do
-  let parsed = process "\\a -> \\b -> let o = b * 3 in a * o + o"
-    -- process "\\a -> \\b -> let o = b * 3 in let c = \\d -> d * 5 + o in c a + c b + o"
+  let parsed = process "\\a -> \\b -> let o = b * 3 in let c = a + b in c + o + (c * o * a)"
+    -- process "\\a -> \\b -> let c = \\d -> d * 5 in c a + c b"
+    -- process "\\a -> \\b -> let o = b * 3 in a + o"
+    
   putStrLn $ errorOrFunction parsed [unknownT, unknownT]
   -- process "\\a -> \\b -> let o = b * 3 in let c = \\d -> d * 5 + o in c a + c b + o"
 -- runInputT defaultSettings loop

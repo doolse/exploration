@@ -65,27 +65,22 @@ collectApps (S.Var name) = do
     tr <- use $ names.at name
     case tr of 
         Just refOr -> pure refOr 
-collectApps (S.App (S.Lam name l) r) = do
-    rr <- collectApps r
-    names.at name .= Just rr 
-    collectApps l
---     (lamArgs, next) <- collectArgs l
---     case lamArgs of 
---         [o] -> do 
---             (_, apps) <- collectApps r (pure $ Just o)
---             (o, nxapps) <- collectApps next mkType
---             pure (o,apps <> nxapps)
--- collectApps lam@(S.Lam _ _) _ = do 
---     (lamArgs, next) <- collectArgs lam
---     case lamArgs of 
---         o -> errorState $  "LAM:" <> show o
+collectApps (S.Lam name b) = do 
+    pure $ Right $ DecodeFunc (\e -> do 
+        t <- collectApps e 
+        names.at name .= Just t 
+        collectApps b)
+collectApps (S.App l r) = do
+    ll <- collectApps l
+    case ll of 
+        Right (DecodeFunc f) -> f r
 collectApps (S.Op op l r) = do 
     ltm <- collectApps l 
     rtm <- collectApps r
     out <- newType
     case (ltm,rtm) of
         (Left lt, Left rt) -> do
-            applics %= (:) (capp (show op) (opToType op) [lt,rt] $ Just out) 
+            applics %= (:) (capp (show op) (opToType op) [lt,rt] out) 
             pure $ Left out 
         o -> error $ "No argTypes:" <> show o
 collectApps (S.Lit (S.LInt i)) = do 
@@ -104,77 +99,3 @@ convertExpr e = do
         body = StateLambda {args = arefs, apps = reverse _applics}
     trace (" state: " <> show s <> show res)
         pure $ lambda "top" (const unknownT <$> arefs) unknownT (ctt initial body) (rt initial body) 
-
---     do 
---   cu <- use currentExpr
---   case cu of 
---     NoExpr -> case e of 
---       S.Lam p next -> addArg p [] next
---     CurrentParams params -> case e of 
---       S.Lam p next -> addArg p params next 
---       o -> do 
---         apps <- collectApps o Nothing
---         ExprState {_exprArgs,_typeCount,_constantTypes} <- get
---         let lamArgs = const unknownT <$> _exprArgs
---             body = StateLambda {args = _exprArgs, apps}
---             (cRefs, cs) = unzip _constantTypes
---             initial = constants cRefs cs $ typeArr _typeCount
---         pure $ lambda "myLam" lamArgs unknownT (ctt initial body) (rt initial body) 
---       -- S.App ap arg -> do 
---       --   exprArgs .= params
---       --   assign currentExpr $ CurrentArgs ap []
---       --   convertExpr arg
---       -- o -> error $ "PARAMS:" <> show o
---     -- CurrentArgs lame argRefs -> case e of 
---     --   S.Op op le re -> do 
---     --     apps %= ((:) $ capp "" (opToType op) (traverse asRef [le, re]) Nothing)
---     --   _ -> error $ "ARGS:" <> show e 
---   where 
---   collectApps :: S.Expr -> Maybe TypeRef -> State ExprState [App]
---   collectApps (S.App (S.Lam name l) r) out = do 
---     lamOut <- addNamed name 
---     rapps <- collectApps r $ Just lamOut
---     lapps <- collectApps l out
---     pure $ lapps <> rapps
---   collectApps (S.App (S.Var il) r) out = do 
---     inn <- use $ inners.at il 
---     pure $ case inn of 
---       Just f -> [ App {name="inner"} ]
---   collectApps (S.Lam name r) out = do 
---     inners.at name .= (Just $ collectApps r)
---     pure []
-
---   collectApps (S.Op op l r) out = do 
---     (leftType,lapps) <- asRef l 
---     (rightType,rapps) <- asRef r 
---     pure $ lapps <> rapps <> [capp "" (opToType op) [leftType, rightType] out]
---   collectApps o _ = error $ "CAPPS:" <> show o
-
---   asRef :: S.Expr -> State ExprState (TypeRef, [App])
---   asRef op@(S.Op _ _ _) = do 
---     typeRef <- newType
---     a <- collectApps op (Just typeRef)
---     pure (typeRef, a)
---   asRef (S.Lit (S.LInt i)) = do 
---     typeRef <- newType
---     constantTypes %= (:) (typeRef, ctInt i)
---     pure (typeRef, [])
---   asRef sapp@(S.App _ _) = do
---     typeRef <- newType
---     a <- collectApps sapp (Just typeRef)
---     pure (typeRef, a)
---   asRef (S.Var n) = do 
---     r <- use $ names.at n
---     let actualRef = case r of 
---           Just ref -> ref
---     pure $ (actualRef, []) 
-      
---   asRef o = do
---     s <- get 
---     error $ "ASREF:" <> show s <> "\n" <> show o
-
-
---   addArg p l next = do 
---     typeRef <- addNamed p
---     assign currentExpr (CurrentParams $ typeRef : l)
---     convertExpr next

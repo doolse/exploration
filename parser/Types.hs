@@ -62,7 +62,7 @@ type LamState = StateT LambdaState (Either Errors)
 type ArgLens = [TypeRef]
 
 
-data App = App {name :: String, f :: ArgLens -> LamState LType, args :: ArgLens, result :: Maybe TypeRef }
+data App = App {name :: String, f :: ArgLens -> LamState LType, args :: ArgLens, result :: TypeRef }
 
 instance Show App where 
   show App {name,args,result} = name <> " args:" <> show args <> " result:" <> show result
@@ -218,7 +218,7 @@ constOrError t = (t, NativeCreate (\t (NativeContext {mkConst}) -> lift $ maybe 
 toM :: forall a m. MonadError Errors m => LamState a -> StateT LambdaState m a 
 toM = mapStateT (either throwError pure)
 
-capp :: String -> Type -> ArgLens -> Maybe TypeRef -> App
+capp :: String -> Type -> ArgLens -> TypeRef -> App
 capp name lam args result = App {name, f = runStateless, args, result}
   where 
   runStateless al = do 
@@ -233,21 +233,18 @@ capp name lam args result = App {name, f = runStateless, args, result}
     
       in case t of 
         t | Just ne <- mkConst t -> pure ne
-        t | Just ref <- guard (refCount t > 1) *> result -> do 
+        t | refCount t > 1 -> do 
             expr <- inlineCall
             me <- lift $ local expr
-            toM $ setOne (withNative t me) ref
+            toM $ setOne (withNative t me) result
             pure $ me
         t -> inlineCall))
 
 
-appLocal :: String -> (ArgLens -> LamState LType) -> ArgLens -> Maybe TypeRef -> App
-appLocal name f args result = App {name, f , args, result}
-
 applyIt :: App -> LamState LType
 applyIt App {f,args,result} = do 
   lt <- f args
-  maybe (pure ()) (modifyOne $ const lt) result 
+  modifyOne (const lt) result 
   pure $ lt
 
 runCT :: [App] -> LamState LType
