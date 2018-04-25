@@ -31,7 +31,8 @@ convertExpr e = do
         assign currentExpr $ CurrentArgs ap []
         convertExpr arg
       o -> error $ "PARAMS:" <> show o
-    CurrentArgs lame argRefs -> 
+    CurrentArgs lame argRefs -> case e of 
+      S.Op op le re -> capp "" 
         error $ "ARGS:" <> show e 
   where 
   addArg p l next = do 
