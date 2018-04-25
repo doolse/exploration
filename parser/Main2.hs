@@ -1,9 +1,10 @@
 {-# LANGUAGE NamedFieldPuns,DuplicateRecordFields,RankNTypes,FlexibleContexts #-}
-{-# LANGUAGE LambdaCase,TupleSections #-}
+{-# LANGUAGE LambdaCase,TupleSections,TemplateHaskell #-}
 
 import Prelude
 
-import Syntax (Expr)
+import qualified Syntax as S
+import qualified Data.Map as Map
 import Eval (runEval)
 import Parser (parseExpr, parseTokens)
 
@@ -11,6 +12,7 @@ import Control.Monad.Trans
 import System.Console.Haskeline
 
 import Types 
+import ConvertExpr
 import Javascript
 import Control.Monad.State
 import Control.Monad.Trans.Except
@@ -22,12 +24,12 @@ import Control.Lens
 mulInt :: Type
 mulInt = lambda "*" [undefInt, undefInt] undefInt doMult doRT
   where 
-  doRT = NativeGenerator (\args toNE out -> do 
+  doRT = NativeGenerator (\args _ _ -> do 
     let a = jsArg args 0
         b = jsArg args 1 
     pure $ nativeJS $ InfixFuncApp " * " a b)
 
-  doMult args = do 
+  doMult args = do
     a <- incRef <$> arr 0 args
     b <- incRef <$> arr 1 args 
     let result = case (a,b) of 
@@ -86,131 +88,6 @@ errorOrFunction l args = either show id $ do
   last <- errorOrlast
   pure $ exprToString $ anonFunc fb (fromNative last)
 
--- larg :: Int -> Type -> Either Errors Type
--- larg i t = case typeT t of 
---   (Lambda {args}) -> arr i args
---   _ -> throwError $ Expected "Lambda"
-
-type TypeRef = Int 
-
-newtype NativeCreate = NativeCreate (forall m. MonadError Errors m => Type -> NativeContext m ->
-  StateT LambdaState m NativeExpr)
-
-type LType = (Type, NativeCreate)
-
-type LambdaState = [LType]
-
-type LamState = StateT LambdaState (Either Errors)
-
--- derive instance lsNT :: Newtype LambdaState _ 
-
-type ArgLens = [TypeRef]
-
-
-data App = App {name :: String, f :: ArgLens -> LamState LType, args :: ArgLens, result :: Maybe TypeRef }
-
-data StateLambda = StateLambda {args :: ArgLens, apps :: [App]}
-
-noNative :: Type -> LType 
-noNative t = (t, NativeCreate (\_ _ -> throwError $ NoNative))
-
-constNative :: NativeExpr -> NativeCreate 
-constNative ne = NativeCreate (\_ _ -> pure $ ne)
-
-withNative :: Type -> NativeExpr -> LType 
-withNative t ne = (t, constNative ne)
-
-constOrError :: Type -> LType 
-constOrError t = (t, NativeCreate (\t (NativeContext {mkConst}) -> lift $ maybe (throwError NoNative) pure $ mkConst t))
-
-
-toM :: forall a m. MonadError Errors m => LamState a -> StateT LambdaState m a 
-toM = mapStateT (either throwError pure)
-
-capp :: String -> Type -> ArgLens -> Maybe TypeRef -> App
-capp name lam args result = App {name, f = runStateless, args, result}
-  where 
-  runStateless al = do 
-    args <- getTypes al
-    LambdaR {frt = NativeGenerator frt, result = resultType, args = rargs} <- lift $ applyLambda lam args >>= lambdaR 
-    typesOnly al rargs
-    pure $ (resultType, NativeCreate (\t ctx@NativeContext {mkConst,local} -> 
-      let inlineCall = do
-            let createArg (t, (NativeCreate f)) = (t,) <$> f t ctx
-            args <- traverse (toM.getLType >=> createArg) al
-            lift $ frt args t ctx
-    
-      in case t of 
-        t | Just ne <- mkConst t -> pure ne
-        t | Just ref <- guard (refCount t > 1) *> result -> do 
-            expr <- inlineCall
-            me <- lift $ local expr
-            toM $ setOne (withNative t me) ref
-            pure $ me
-        t -> inlineCall))
-
-
-appLocal :: String -> (ArgLens -> LamState LType) -> ArgLens -> Maybe TypeRef -> App
-appLocal name f args result = App {name, f , args, result}
-
-applyIt :: String -> App -> LamState LType
-applyIt phase App {f,args,result} = do 
-  lt <- f args
-  maybe (pure ()) (modifyOne $ const lt) result 
-  pure $ lt
-
-runCT :: [App] -> LamState LType
-runCT apps = do 
-  let applyCT app = Just <$> applyIt "ct" app
-      run = foldl (\a b -> a *> applyCT b) (pure Nothing) apps
-  run >>= maybe (throwError $ Expected "") pure
-
-typeArr :: Int -> LambdaState
-typeArr len = replicate len (noNative unknownT) 
-
-constants :: ArgLens -> [Type] -> LambdaState -> LambdaState 
-constants al t = execState $ traverse_ mkConstant $ zip al t
-  where mkConstant (i, t) = modifyOne (\_ -> constOrError t) i 
-
-aix :: Int -> ArgLens -> TypeRef
-aix i arr = arr !! i 
-
-setOne :: LType -> TypeRef -> LamState ()
-setOne = modifyOne . const
-
-modifyOne :: forall m. MonadState LambdaState m => (LType -> LType) -> TypeRef -> m () 
-modifyOne f i = modifying (ix i) f
-
-typesOnly :: ArgLens -> [Type] -> LamState ()
-typesOnly al types = traverse_ (\(i, t) -> modifyOne (bimap (const t) id) i) $ zip al types 
-
-getLType :: TypeRef -> LamState LType 
-getLType i = (\t -> t !! i) <$> get
-
-getLTypes :: ArgLens -> LamState [LType]
-getLTypes = traverse getLType
-
-getTypes :: ArgLens -> LamState [Type]
-getTypes a = fmap fst <$> getLTypes a
-
-ct :: StateLambda -> [Type] -> LamState ArgsResult
-ct StateLambda {args,apps} aargs = do 
-  typesOnly args aargs
-  result <- fst <$> runCT apps 
-  newargs <- getTypes args
-  pure ArgsResult {args= newargs, result}
-
-ctt :: LambdaState -> StateLambda -> [Type] -> Either Errors ArgsResult
-ctt initial lam args = evalStateT (ct lam args) initial
-
-rt :: LambdaState -> StateLambda -> NativeGenerator
-rt initial StateLambda {apps,args} = NativeGenerator (\nargs t ctx -> 
-  let 
-  doRT = do
-    traverse_ (\(i, (t, ne)) -> setOne (withNative t ne) i) $ zip args nargs
-    (t, (NativeCreate f)) <- runCT apps
-    (evalStateT $ f t ctx) <$> get
-  in either throwError id $ evalStateT doRT initial)
   
 -- aba :: Type 
 -- aba = lambda "aba" [unknownT, unknownT] unknownT (ctt initial body) (rt initial body)
@@ -314,9 +191,10 @@ process input = do
     Left err -> do
       putStrLn "Parse Error:"
       print err
-    Right ast -> exec ast
+    Right ast -> putStrLn $ show $ runState (convertExpr ast) 
+      ExprState {_currentExpr=NoExpr, _names=Map.empty, _args=[], _typeCount = 0, _apps=[]}
 
-exec :: Expr -> IO ()
+exec :: S.Expr -> IO ()
 exec ast = do
   let result = runEval ast
   case result of
