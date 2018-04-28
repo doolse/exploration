@@ -21,6 +21,7 @@ import Control.Monad.Error.Class
 import Data.Foldable
 import Control.Lens
 import NativeJavascript
+import Debug.Trace
 
   
 -- aba :: Type 
@@ -118,10 +119,10 @@ import NativeJavascript
 process :: String -> Type
 process input = do
   case parseExpr input of
-    Left err -> do
-      error err
-    Right ast -> evalState (convertExpr ast) 
-      ExprState {_names=Map.empty, _applics=[], _typeCount = 0, _constantTypes = []}
+    Left err -> error err
+    Right ast -> -- do 
+      trace (show ast) $
+      evalState (convertExpr ast) ExprState {_names=Map.empty, _applics=[], _typeCount = 0, _constantTypes = []}
 
 main :: IO ()
 main = runInputT defaultSettings loop
@@ -137,7 +138,7 @@ main = runInputT defaultSettings loop
     minput <- getInputLine "Happy> "
     case minput of
       Nothing -> outputStrLn "Goodbye."
-      Just input -> (liftIO $ putStrLn $ errorOrFunction (process input) [unknownT, ctInt 45]) >> loop
+      Just input -> (liftIO $ putStrLn $ errorOrFunction (process input) [unknownT, unknownT]) >> loop
 
     
 

@@ -12,7 +12,8 @@ import Control.Lens
 import Control.Monad.State
 import Data.Semigroup
 import NativeJavascript
-import Debug.Trace
+import Debug.Trace 
+import Data.Either.Combinators
 
 
 newtype DecodeFunc = DecodeFunc (S.Expr -> State ExprState (Either TypeRef DecodeFunc))
@@ -35,6 +36,9 @@ makeLenses ''ExprState
 opToType :: S.Binop -> Type 
 opToType S.Mul = mulInt
 opToType S.Add = add
+
+nameToType :: String -> Maybe Type 
+nameToType "ifThenElse" = Just ifThenElse
 
 newType :: State ExprState TypeRef
 newType = typeCount <<%= (+) 1
@@ -60,11 +64,29 @@ errorState msg = do
     s <- get 
     error $ show s
 
+
 collectApps :: S.Expr -> State ExprState (Either TypeRef DecodeFunc)
 collectApps (S.Var name) = do 
     tr <- use $ names.at name
     case tr of 
         Just refOr -> pure refOr 
+        Nothing -> case nameToType name of 
+            Just ty@(Type {t=Lambda LambdaR {args}}) -> do
+                let decodeUntil :: Int -> [Either TypeRef DecodeFunc] -> DecodeFunc
+                    decodeUntil 1 args = DecodeFunc (\e -> do 
+                        a <- collectApps e 
+                        out <- newType
+                        case sequence $ swapEither <$> (a : args) of 
+                            Right argRefs -> do 
+                                applics %= (:) (capp (show ty) ty (reverse argRefs) out)
+                                pure $ Left out 
+                        )
+                    decodeUntil m args = DecodeFunc (\e -> do 
+                        a <- collectApps e 
+                        pure $ Right $ decodeUntil (m - 1) (a : args)
+                        )
+                pure $ Right $ decodeUntil (length args) []
+            Nothing -> error $ "No variable of function named: " ++ show name
 collectApps (S.Lam name b) = do 
     pure $ Right $ DecodeFunc (\e -> do 
         t <- collectApps e 
@@ -83,9 +105,12 @@ collectApps (S.Op op l r) = do
             applics %= (:) (capp (show op) (opToType op) [lt,rt] out) 
             pure $ Left out 
         o -> error $ "No argTypes:" <> show o
-collectApps (S.Lit (S.LInt i)) = do 
+collectApps (S.Lit l) = do 
     c <- newType
-    constantTypes %= (:) (c, ctInt i)
+    constantTypes %= (:) (c, case l of 
+        S.LInt i -> ctInt i
+        S.LBool b -> ctBool b
+        )
     pure $ Left c
 collectApps o = error $ "COLLECT:" <> show o
 

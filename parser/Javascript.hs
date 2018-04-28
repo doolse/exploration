@@ -14,7 +14,9 @@ data JSExpr =
     Reference String
     | JSInt Int
     | JSString String
-    | InfixFuncApp String JSExpr JSExpr 
+    | JSBool Bool
+    | JSInfix Int String JSExpr JSExpr 
+    | JSTernary JSExpr JSExpr JSExpr
     | JSAnonFunc JSFunctionBody
 
 type JS = ExceptT Errors (State JSFunctionBody)
@@ -32,6 +34,7 @@ typeToJS :: Type -> Maybe JSExpr
 typeToJS (Type {t}) = case t of 
     (IntT (Just a)) -> pure $ JSInt a
     (StringT (Just s)) -> pure $ JSString s
+    (BoolT (Just b)) -> pure $ JSBool b
     _ -> Nothing
 
 data JSStatement = 
@@ -47,17 +50,26 @@ anonFunc b = JSAnonFunc . addReturn b
 addReturn :: JSFunctionBody -> JSExpr -> JSFunctionBody
 addReturn fb e = fb {stmts = mappend (stmts fb) [Return e] }
 
-exprToString :: JSExpr -> String
-exprToString (Reference l) = l 
-exprToString (JSString s) = "\"" <> s <> "\""
-exprToString (JSInt i) = show i
-exprToString (InfixFuncApp n a b) = exprToString a <> n <> exprToString b
-exprToString (JSAnonFunc JSFunctionBody {params, stmts}) =  "function(" <> (intercalate "," params) <> ") {\n" <> 
-    intercalate "\n" (stmtToString <$> stmts) <> "\n}\n"
+exprToStringB :: Int -> JSExpr -> String 
+exprToStringB i e = case exprToString e of 
+    (p, s) | p < i && p /= 0 -> "(" <> s <> ")"
+    (_, s) -> s
+
+exprToString :: JSExpr -> (Int, String)
+exprToString (Reference l) = (0, l)
+exprToString (JSString s) = (0, "\"" <> s <> "\"")
+exprToString (JSInt i) = (0, show i)
+exprToString (JSBool True) = (0, "true")
+exprToString (JSTernary a b c) = 
+    (4, exprToStringB 4 a <> " ? " <> exprToStringB 4 b <> " : " <> exprToStringB 4 c)
+exprToString (JSBool False) = (0, "false")
+exprToString (JSInfix p op a b) = (p, exprToStringB p a <> op <> exprToStringB p b)
+exprToString (JSAnonFunc JSFunctionBody {params, stmts}) =  (0, "function(" <> (intercalate "," params) <> ") {\n" <> 
+    intercalate "\n" (stmtToString <$> stmts) <> "\n}\n")
 
 stmtToString :: JSStatement -> String
-stmtToString (Return expr) = "return " <> exprToString expr <> ";"
-stmtToString (AssignVar v expr) = "var " <> v <> " = " <> exprToString expr <> ";"
+stmtToString (Return expr) = "return " <> (snd $ exprToString expr) <> ";"
+stmtToString (AssignVar v expr) = "var " <> v <> " = " <> exprToStringB 3 expr <> ";"
 
 constOrArg :: Type -> JS JSExpr
 constOrArg t = maybe createArg pure $ typeToJS t

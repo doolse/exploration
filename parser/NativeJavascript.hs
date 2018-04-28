@@ -9,13 +9,34 @@ import Data.Semigroup
 import Control.Monad.State
 import Control.Monad.Trans.Except
 
+ifThenElse :: Type 
+ifThenElse = lambda "ifThenElse" [undefBool, unknownT, unknownT] unknownT doIf doRT 
+  where 
+  doRT = NativeGenerator (\args _ _ -> do
+    let a = jsArg args 0
+        b = jsArg args 1 
+        c = jsArg args 2
+    pure $ nativeJS $ JSTernary a b c)
+  doIf args = do 
+    a <- arr 0 args
+    b <- arr 1 args 
+    c <- arr 2 args
+    result <- case boolValue a of 
+          Just True -> pure b
+          Just False -> pure c
+          _ -> do 
+            r <- unify b c
+            unify r unknownT
+    pure $ ArgsResult {args=[a,b,c], result}
+
+
 mulInt :: Type
 mulInt = lambda "*" [undefInt, undefInt] undefInt doMult doRT
   where 
   doRT = NativeGenerator (\args _ _ -> do 
     let a = jsArg args 0
         b = jsArg args 1 
-    pure $ nativeJS $ InfixFuncApp " * " a b)
+    pure $ nativeJS $ JSInfix 14 " * " a b)
 
   doMult args = do
     a <- incRef <$> arr 0 args
@@ -39,7 +60,7 @@ addString = lambda "+" [undefString, undefString] undefString doAddStr doAddStrR
   doAddStrRT = NativeGenerator (\args toNE out -> do
     let a = jsArg args 0
         b = jsArg args 1 
-    pure $ nativeJS $ InfixFuncApp " + " a b)
+    pure $ nativeJS $ JSInfix 13 " + " a b)
   
 add :: Type 
 add = polyLambda "+" [unknownT, unknownT] unknownT [addInt, addString]
@@ -51,7 +72,7 @@ addInt = lambda "+" [undefInt, undefInt] undefInt doMult doRT
     -- {a:JSInt 0,b} -> b
     -- {a,b:JSInt 0} -> a 
     -- {a:JSInt a,b:JSInt b} -> JSInt $ a + b
-    (a,b) -> InfixFuncApp " + " a b)
+    (a,b) -> JSInfix 13 " + " a b)
 
   doMult args = do 
     a <- incRef <$> arr 0 args
@@ -74,4 +95,4 @@ errorOrFunction l args = either show id $ do
         f nargs unknownT NativeContext {mkConst,local}
   let (errorOrlast, fb) = runState (runExceptT funcBody) emptyFunction
   last <- errorOrlast
-  pure $ exprToString $ anonFunc fb (fromNative last)
+  pure $ snd $ exprToString $ anonFunc fb (fromNative last)

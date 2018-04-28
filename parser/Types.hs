@@ -18,7 +18,7 @@ data Errors = Expected String
   | MissingArg String 
   | TooManyArgs Int Int
   | FailedUnification
-  | NoNative deriving Eq
+  | NoNative String deriving Eq
 
 data TypeFlags = UnifyWith String 
 
@@ -79,6 +79,7 @@ typeT (Type {t}) = t
 typeToPrim :: TypeT -> Maybe PrimType 
 typeToPrim (IntT _) = Just PInt 
 typeToPrim (StringT _) = Just PString 
+typeToPrim (BoolT _) = Just PBool
 typeToPrim _ = Nothing
 
 emptyPrim :: PrimType -> TypeT
@@ -114,6 +115,11 @@ ctArr art arr = Type {t=ArrayT art (Just arr), refs=0}
 arr :: Int -> [Type] -> Either Errors Type 
 arr i args = pure $ args !! i
 
+boolValue :: Type -> Maybe Bool
+boolValue (Type {t}) = case t of 
+  (BoolT b) -> b 
+  _ -> Nothing
+  
 intValue :: Type -> Maybe Int 
 intValue (Type {t}) = case t of 
   (IntT a) -> a 
@@ -136,6 +142,9 @@ undefInt = undefPrim PInt
 undefString :: Type 
 undefString = undefPrim PString
 
+ctBool :: Bool -> Type 
+ctBool b = Type {t=BoolT (Just b), refs=0}
+
 ctInt :: Int -> Type 
 ctInt i = Type {t=IntT (Just i), refs=0}
 
@@ -148,7 +157,7 @@ polyLambda :: String
   -> [Type]
   -> Type
 polyLambda name args result lams = Type {t = Lambda LambdaR {name, args, result, f, 
-  frt = NativeGenerator (\_ _ _ -> throwError $ Expected "")}, refs=0}
+  frt = NativeGenerator (\_ _ _ -> throwError $ NoNative name)}, refs=0}
   where 
   f newargs = 
     let ignoreError l = either (const Nothing) Just $ applyLambda l newargs
@@ -206,7 +215,7 @@ applyUnsafe t args = (case typeT t of
 --   pure $ ArgsResult {args,result}
 
 noNative :: Type -> LType 
-noNative t = (t, NativeCreate (\_ _ -> throwError NoNative))
+noNative t = (t, NativeCreate (\_ _ -> throwError $ NoNative "Not created yet"))
 
 constNative :: NativeExpr -> NativeCreate 
 constNative ne = NativeCreate (\_ _ -> pure ne)
@@ -215,7 +224,7 @@ withNative :: Type -> NativeExpr -> LType
 withNative t ne = (t, constNative ne)
 
 constOrError :: Type -> LType 
-constOrError t = (t, NativeCreate (\t (NativeContext {mkConst}) -> lift $ maybe (throwError NoNative) pure $ mkConst t))
+constOrError t = (t, NativeCreate (\t (NativeContext {mkConst}) -> lift $ maybe (throwError $ NoNative "Needed const") pure $ mkConst t))
 
 
 toM :: forall a m. MonadError Errors m => LamState a -> StateT LambdaState m a 
@@ -254,7 +263,7 @@ runCT :: [App] -> LamState LType
 runCT apps = do 
   let applyCT app = Just <$> applyIt app
       run = foldl (\a b -> a *> applyCT b) (pure Nothing) apps
-  run >>= maybe (throwError $ Expected "") pure
+  run >>= maybe (throwError $ NoNative "No applications") pure
 
 typeArr :: Int -> LambdaState
 typeArr len = replicate len (noNative unknownT) 
@@ -312,7 +321,7 @@ instance Show Errors where
     (TooManyArgs actual expected) -> "Too many arguments to function, expected" 
         <> show expected <> " but got " <> show actual
     FailedUnification -> "Failed to unify types"
-    NoNative -> "No native representation"
+    NoNative what -> "No native representation: " <> what
 
 instance Show TypeT where 
   show = \case 
