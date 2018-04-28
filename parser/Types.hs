@@ -22,7 +22,7 @@ data Errors = Expected String
 
 data TypeFlags = UnifyWith String 
 
-data PrimType = PInt | PString deriving Eq
+data PrimType = PInt | PString | PBool deriving Eq
 
 data NativeExpr 
 
@@ -42,6 +42,7 @@ data LambdaR = LambdaR { name :: String, args :: [Type], result :: Type,
 data TypeT = 
     UnknownT 
   | IntT (Maybe Int)  
+  | BoolT (Maybe Bool)
   | StringT (Maybe String)
   | ArrayT Type (Maybe [Type])
   | Lambda LambdaR
@@ -83,10 +84,12 @@ typeToPrim _ = Nothing
 emptyPrim :: PrimType -> TypeT
 emptyPrim PInt = IntT Nothing
 emptyPrim PString = StringT Nothing 
+emptyPrim PBool = BoolT Nothing
 
 primToString :: PrimType -> String 
 primToString PInt = "Int"
 primToString PString = "String"
+primToString PBool = "Bool"
 
 unify :: Type -> Type -> Either Errors Type 
 unify (Type {t=t1}) (Type {t=t2, refs=r2}) = (\nt -> Type {t=nt, refs=r2}) <$> unifyT t1 t2 
@@ -122,10 +125,10 @@ strValue (Type {t}) = case t of
   _ -> Nothing
 
 undefPrim :: PrimType -> Type 
-undefPrim p = Type {t, refs=0}
-  where t = case p of 
-          PInt -> IntT Nothing 
-          PString -> StringT Nothing 
+undefPrim p = Type {t = emptyPrim p, refs=0}
+
+undefBool :: Type 
+undefBool = undefPrim PBool
 
 undefInt :: Type 
 undefInt = undefPrim PInt
