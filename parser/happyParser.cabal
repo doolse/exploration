@@ -18,8 +18,9 @@ executable happyParser
     , mtl        >= 2.2 && <2.4
     , either
     , transformers
+    , vector
   default-language:    Haskell2010
-  main-is:             Main2.hs
+  main-is:             NewTypes.hs
 
   Build-depends:       base, array
   build-tools:         alex, happy
