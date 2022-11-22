@@ -1,0 +1,9 @@
+{
+	"name": "testsgdf",
+	"location": "australiasoutheast",
+	"identity": {
+		"type": "SystemAssigned",
+		"principalId": "f5e5702f-33de-4491-b497-b440607e0837",
+		"tenantId": "35323af9-36df-4c62-9804-fbb3bd887cbe"
+	}
+}

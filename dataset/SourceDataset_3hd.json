@@ -1,0 +1,42 @@
+{
+	"name": "SourceDataset_3hd",
+	"properties": {
+		"linkedServiceName": {
+			"referenceName": "TestDS",
+			"type": "LinkedServiceReference"
+		},
+		"annotations": [],
+		"type": "AzureSqlTable",
+		"schema": [
+			{
+				"name": "SessionId",
+				"type": "nvarchar"
+			},
+			{
+				"name": "WeekId",
+				"type": "uniqueidentifier"
+			},
+			{
+				"name": "Enabled",
+				"type": "bit"
+			},
+			{
+				"name": "Player1Id",
+				"type": "uniqueidentifier"
+			},
+			{
+				"name": "Player2Id",
+				"type": "uniqueidentifier"
+			},
+			{
+				"name": "Time",
+				"type": "nvarchar"
+			}
+		],
+		"typeProperties": {
+			"schema": "dbo",
+			"table": "BookingSlots"
+		}
+	},
+	"type": "Microsoft.DataFactory/factories/datasets"
+}
