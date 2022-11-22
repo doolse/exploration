@@ -20,7 +20,7 @@
 					},
 					{
 						"name": "Destination",
-						"value": "testdw//sample.csv"
+						"value": "testdw//thiswaschanged.csv"
 					}
 				],
 				"typeProperties": {
